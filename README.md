@@ -10,4 +10,4 @@ I'm a Front-end developer based in Qatar.
 - 🛴  Build a chat app in Flutter. 
 - 🚅  Make a desktop version of Chat App as well.
  
-**Let's connect**: [LinkedIn](www.linkedin.com/in/riymoh) • [Website](https://www.riymoh.com/)
+**Let's connect**: [LinkedIn](https://www.linkedin.com/in/riymoh) • [Website](https://www.riymoh.com/)
