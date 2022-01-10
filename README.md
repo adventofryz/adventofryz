@@ -4,7 +4,7 @@ I'm a Front-end developer based in Qatar.
 
 **2022 Goals** 
 - 📦  Learn SASS, Typescript
-- 🏍️  Build Personal Website with Next.js, SASS, Typescript and deploy on Vercel with Github integration.
+- 🏍️  Build Personal Website with Next.js, Ant Design, SASS, Typescript and deploy on Vercel with Github integration.
 - 🏎️  Learn a Backend framework (Express.js) and build an app with it.
 - 🚲  Build an e-commerce web app.
 - 🛴  Build a chat app in Flutter. 
