@@ -1,13 +1,11 @@
 ### Hi there, I'm Riyaz.
 
-I'm a Front-end developer based in Qatar.
+I'm a Fullstack developer based in Qatar.
 
-**2022 Goals** 
-- 📦  Learn SASS, Typescript
-- 🏍️  Build Personal Website with Next.js, Ant Design, SASS, Typescript and deploy on Vercel with Github integration.
-- 🏎️  Learn a Backend framework (Express.js) and build an app with it.
-- 🚲  Build an e-commerce web app.
-- 🛴  Build a chat app in Flutter. 
-- 🚅  Make a desktop version of Chat App as well.
+**2023 Goals** 
+- 📦  Learn Typescript, Remix, and Framer motion.
+- 🏍️  Build Personal Website with Next.js, Tailwind, and deploy on Vercel.
+- 🚲  Work on understanding Jest testing framework.
+- 🛴  Build a miniature chat app. 
  
 **Let's connect**: [LinkedIn](https://www.linkedin.com/in/riymoh) • [Website](https://www.riymoh.com/)
