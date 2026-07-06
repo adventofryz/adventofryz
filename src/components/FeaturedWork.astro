@@ -1,5 +1,5 @@
 ---
-import VehicleMapPlaceholder from './VehicleMapPlaceholder.astro';
+import FleetMap from './FleetMap.tsx';
 
 const tags = ['MapLibre', 'deck.gl', 'React'];
 ---
@@ -9,25 +9,48 @@ const tags = ['MapLibre', 'deck.gl', 'React'];
     <h2>Featured work</h2>
 
     <article class="card">
-      <VehicleMapPlaceholder />
+      <FleetMap client:visible />
 
       <div class="card-body">
         <h3>Fleet tracking at scale</h3>
         <p class="writeup">
-          Tracking ~5,000 vehicles in real time meant the map had to redraw thousands of
-          positions per frame without stalling the browser. Using deck.gl's IconLayer over
-          MapLibre GL offloads that rendering to the GPU instead of the DOM, so position
-          updates stay smooth even at full fleet scale.
+          A live fleet-tracking map rebuilding the core of a production dispatch system: ~5,000
+          vehicles moving along San Francisco's real street network, rendered with MapLibre GL and
+          deck.gl's IconLayer.
         </p>
 
-        <ul class="tags">
-          {tags.map((tag) => <li>{tag}</li>)}
+        <ul class="challenges">
+          <li>
+            <span class="challenge-index">01</span>
+            <strong>Stitching overlapping updates</strong>
+            <p>Periodic position updates redeliver already-seen data; deduped by timestamp so playback never rewinds or jumps.</p>
+          </li>
+          <li>
+            <span class="challenge-index">02</span>
+            <strong>Smoothing across update latency</strong>
+            <p>Rendering the latest known position as it arrived caused a freeze-then-snap between updates; fixed with a playback delay so there's always a real buffered window to interpolate through.</p>
+          </li>
+          <li>
+            <span class="challenge-index">03</span>
+            <strong>Rendering at scale</strong>
+            <p>Thousands of live-updating positions without stalling the browser, via GPU-based rendering and eliminating redundant per-vehicle work on every frame.</p>
+          </li>
         </ul>
 
-        <p class="links">
-          <a class="btn btn-ghost" href="#">Source code</a>
-          <a class="btn btn-solid" href="#">Live demo ↗</a>
-        </p>
+        <div class="card-footer">
+          <ul class="tags">
+            {tags.map((tag) => <li>{tag}</li>)}
+          </ul>
+
+          <a
+            class="btn btn-solid"
+            href="https://github.com/adventofryz/adventofryz/tree/main/src/components/fleet"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Source code
+          </a>
+        </div>
       </div>
     </article>
   </div>
@@ -65,8 +88,61 @@ const tags = ['MapLibre', 'deck.gl', 'React'];
 
   .writeup {
     color: var(--text-muted);
-    max-width: 62ch;
-    margin: 0 0 1.25rem;
+    max-width: 68ch;
+    margin: 0 0 1.75rem;
+  }
+
+  .challenges {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 1.75rem;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.25rem;
+  }
+
+  .challenges li {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1rem;
+  }
+
+  .challenge-index {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--accent);
+    margin-bottom: 0.5rem;
+  }
+
+  .challenges strong {
+    display: block;
+    color: var(--text);
+    font-size: 0.9rem;
+    margin-bottom: 0.4rem;
+  }
+
+  .challenges p {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    line-height: 1.5;
+    margin: 0;
+  }
+
+  @media (max-width: 720px) {
+    .challenges {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .card-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 1rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid var(--border);
   }
 
   .tags {
@@ -74,7 +150,7 @@ const tags = ['MapLibre', 'deck.gl', 'React'];
     gap: 0.5rem;
     list-style: none;
     padding: 0;
-    margin: 0 0 1.5rem;
+    margin: 0;
     flex-wrap: wrap;
   }
 
@@ -88,12 +164,6 @@ const tags = ['MapLibre', 'deck.gl', 'React'];
     padding: 0.25rem 0.75rem;
   }
 
-  .links {
-    display: flex;
-    gap: 0.75rem;
-    margin: 0;
-  }
-
   .btn {
     display: inline-flex;
     align-items: center;
@@ -101,16 +171,8 @@ const tags = ['MapLibre', 'deck.gl', 'React'];
     font-size: 0.9rem;
     padding: 0.55rem 1.1rem;
     border-radius: 8px;
-    transition: opacity 150ms ease, background 150ms ease;
-  }
-
-  .btn-ghost {
-    border: 1px solid var(--border);
-  }
-
-  .btn-ghost:hover,
-  .btn-ghost:focus-visible {
-    background: var(--bg);
+    transition: opacity 150ms ease;
+    white-space: nowrap;
   }
 
   .btn-solid {

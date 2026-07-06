@@ -1,0 +1,171 @@
+.fleet-demo {
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 400ms ease-out, transform 400ms ease-out;
+}
+
+.fleet-demo-ready {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fleet-demo {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+}
+
+.fleet-stats {
+  display: flex;
+  gap: 2rem;
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.fleet-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.fleet-stat-value {
+  font-family: var(--font-mono);
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.fleet-stat-moving {
+  color: var(--accent);
+}
+
+.fleet-stat-idle {
+  color: var(--text-muted);
+}
+
+.fleet-stat-label {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.fleet-map-wrap {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 680 / 420;
+  background-color: var(--bg);
+  overflow: hidden;
+}
+
+.fleet-map {
+  position: absolute;
+  inset: 0;
+}
+
+.fleet-badge {
+  position: absolute;
+  top: 0.75rem;
+  left: 0.75rem;
+  z-index: 1;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--accent);
+  background: var(--accent-soft);
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+  pointer-events: none;
+}
+
+.fleet-legend {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  z-index: 1;
+  display: flex;
+  gap: 0.75rem;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.35rem 0.75rem;
+  pointer-events: none;
+}
+
+.fleet-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.fleet-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  display: inline-block;
+}
+
+.fleet-dot-moving {
+  background: var(--accent);
+}
+
+.fleet-dot-idle {
+  background: var(--text-muted);
+}
+
+/* MapLibre's own attribution control (compact mode) replaces the manual
+   attribution div now that the basemap is real CARTO tiles instead of a
+   hand-drawn roads layer — style it to fit the dark theme. This file is a
+   plain global stylesheet (not CSS modules), so no :global() wrapper needed
+   to reach maplibre's own DOM classes. */
+.fleet-map .maplibregl-ctrl-attrib {
+  background: rgba(18, 24, 34, 0.75);
+  color: var(--text-muted);
+  font-size: 0.65rem;
+}
+
+.fleet-map .maplibregl-ctrl-attrib a {
+  color: var(--text-muted);
+}
+
+.fleet-popover {
+  position: absolute;
+  bottom: 0.75rem;
+  left: 0.75rem;
+  z-index: 1;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.6rem 0.8rem;
+  font-size: 0.75rem;
+  min-width: 9rem;
+}
+
+.fleet-popover-title {
+  margin: 0 0 0.35rem;
+  font-family: var(--font-mono);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.fleet-popover-job {
+  margin: 0 0 0.5rem;
+  color: var(--accent);
+}
+
+.fleet-popover p {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0.15rem 0;
+  color: var(--text-muted);
+}
+
+.fleet-popover p span:last-child {
+  font-family: var(--font-mono);
+  color: var(--text);
+}
