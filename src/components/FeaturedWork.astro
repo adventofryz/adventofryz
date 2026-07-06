@@ -1,0 +1,126 @@
+---
+import VehicleMapPlaceholder from './VehicleMapPlaceholder.astro';
+
+const tags = ['MapLibre', 'deck.gl', 'React'];
+---
+
+<section id="work">
+  <div class="container">
+    <h2>Featured work</h2>
+
+    <article class="card">
+      <VehicleMapPlaceholder />
+
+      <div class="card-body">
+        <h3>Fleet tracking at scale</h3>
+        <p class="writeup">
+          Tracking ~5,000 vehicles in real time meant the map had to redraw thousands of
+          positions per frame without stalling the browser. Using deck.gl's IconLayer over
+          MapLibre GL offloads that rendering to the GPU instead of the DOM, so position
+          updates stay smooth even at full fleet scale.
+        </p>
+
+        <ul class="tags">
+          {tags.map((tag) => <li>{tag}</li>)}
+        </ul>
+
+        <p class="links">
+          <a class="btn btn-ghost" href="#">Source code</a>
+          <a class="btn btn-solid" href="#">Live demo ↗</a>
+        </p>
+      </div>
+    </article>
+  </div>
+</section>
+
+<style>
+  #work {
+    padding: 6rem 0;
+  }
+
+  h2 {
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin: 0 0 1.5rem;
+  }
+
+  .card {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    overflow: hidden;
+  }
+
+  .card-body {
+    padding: 1.75rem;
+  }
+
+  h3 {
+    margin: 0 0 0.75rem;
+    font-size: 1.4rem;
+  }
+
+  .writeup {
+    color: var(--text-muted);
+    max-width: 62ch;
+    margin: 0 0 1.25rem;
+  }
+
+  .tags {
+    display: flex;
+    gap: 0.5rem;
+    list-style: none;
+    padding: 0;
+    margin: 0 0 1.5rem;
+    flex-wrap: wrap;
+  }
+
+  .tags li {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--accent);
+    border: 1px solid var(--accent-soft);
+    background: var(--accent-soft);
+    border-radius: 999px;
+    padding: 0.25rem 0.75rem;
+  }
+
+  .links {
+    display: flex;
+    gap: 0.75rem;
+    margin: 0;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    text-decoration: none;
+    font-size: 0.9rem;
+    padding: 0.55rem 1.1rem;
+    border-radius: 8px;
+    transition: opacity 150ms ease, background 150ms ease;
+  }
+
+  .btn-ghost {
+    border: 1px solid var(--border);
+  }
+
+  .btn-ghost:hover,
+  .btn-ghost:focus-visible {
+    background: var(--bg);
+  }
+
+  .btn-solid {
+    color: var(--accent-ink);
+    background: var(--accent);
+    font-weight: 600;
+  }
+
+  .btn-solid:hover,
+  .btn-solid:focus-visible {
+    opacity: 0.9;
+  }
+</style>

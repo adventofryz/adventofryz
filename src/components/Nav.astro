@@ -1,0 +1,65 @@
+---
+const links = [
+  { href: '#work', label: 'Work' },
+  { href: '#about', label: 'About' },
+  { href: '#contact', label: 'Contact' },
+];
+---
+
+<header class="nav">
+  <div class="container nav-inner">
+    <a class="mark" href="#hero">RM</a>
+    <nav>
+      <ul>
+        {links.map((link) => (
+          <li><a href={link.href}>{link.label}</a></li>
+        ))}
+      </ul>
+    </nav>
+  </div>
+</header>
+
+<style>
+  .nav {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    backdrop-filter: blur(8px);
+    background: rgba(10, 14, 20, 0.75);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .nav-inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 3.5rem;
+  }
+
+  .mark {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    text-decoration: none;
+    letter-spacing: 0.05em;
+  }
+
+  ul {
+    display: flex;
+    gap: 1.75rem;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  nav a {
+    text-decoration: none;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    transition: color 150ms ease;
+  }
+
+  nav a:hover,
+  nav a:focus-visible {
+    color: var(--text);
+  }
+</style>
