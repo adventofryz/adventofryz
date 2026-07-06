@@ -1,6 +1,6 @@
 ### Hi there, I'm Riyaz.
 
-I'm a Fullstack developer based in Qatar.
+I'm a Software Developer based in Qatar.
 
 **2026 Goals** 
 - 📦  Learn how to not waste time on pointless things.
