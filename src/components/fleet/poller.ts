@@ -14,10 +14,14 @@ export const OVERLAP_MS = 1500;
 // Per-poll odds of each failure mode (independent, moving vehicles only).
 // Rare enough that a 100-vehicle fleet still reads as flowing, but frequent
 // enough that all four merge-side cases (empty/dedupe/gap/outlier) are
-// visibly exercised within a few poll cycles.
+// visibly exercised within a few poll cycles. GPS_LOSS and OUTLIER are the
+// two that can visibly teleport a vehicle off its route (a lone outlier only
+// does so if it lands with no corrective point left in the same batch to
+// contradict it) — kept low so jumps read as an occasional, notable event
+// rather than something happening to half the fleet every poll.
 const DROP_CHANCE = 0.05;
-const GPS_LOSS_CHANCE = 0.05;
-const OUTLIER_CHANCE = 0.04;
+const GPS_LOSS_CHANCE = 0.02;
+const OUTLIER_CHANCE = 0.015;
 
 // How much of the sample window a GPS-loss poll swallows from the front —
 // standing in for the "underground" stretch the device couldn't report

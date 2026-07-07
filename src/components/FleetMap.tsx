@@ -38,6 +38,20 @@ const BUFFER_RETENTION_MS = PLAYBACK_DELAY_MS + POLL_INTERVAL_MS + 5000;
 // How far back the fading trail reaches behind each vehicle.
 const TRAIL_LENGTH_MS = 8000;
 
+// How long a vehicle keeps showing the alert pulse after its data becomes
+// untrustworthy (a GPS-loss `gap`, or a dropped-poll freeze — see
+// `droppedLastBatch` below). Sized to the *drop* case's ~8.5s median hold
+// (empirically measured), not the shorter ~4.25s gap-hold — the reverse
+// would mean the ring routinely fades out before the more common drop case
+// ever resolves. Still short enough not to linger once reporting is normal.
+const ANOMALY_PULSE_DURATION_MS = 9000;
+// Concurrent staggered rings (rather than one ring resetting) so the pulse
+// reads as a continuous radar sweep instead of a single blink-and-restart.
+const PULSE_RING_PERIOD_MS = 1400;
+const PULSE_RING_COUNT = 3;
+const PULSE_MIN_RADIUS_PX = 9;
+const PULSE_MAX_RADIUS_PX = 26;
+
 // A real cartographic basemap (roads, native labels) instead of hand-drawn
 // line geometry — CARTO's free, keyless styles. This is a deliberate
 // exception to the site's "no external runtime calls" rule: the
@@ -69,6 +83,14 @@ interface TripDatum {
   path: [number, number][];
   timestamps: number[];
   idle: boolean;
+}
+
+interface PulseRingDatum {
+  id: string;
+  lat: number;
+  lng: number;
+  radius: number;
+  opacity: number;
 }
 
 function hexToRgb(hex: string): [number, number, number] {
@@ -120,13 +142,13 @@ export default function FleetMap() {
       // small to read at the full-bbox scale. A modest bump keeps individual
       // paths legible; zooming out to see the full spread (up to the minZoom
       // lock above) is still available.
-      map.setZoom(map.getZoom() + 2);
-      // The bbox's centroid (default fitBounds center) lands in the
-      // Union Square/Financial District core, which at this zoom is mostly
-      // dense building blocks rather than visible road grid. SOMA has wider
-      // streets and lower building coverage, so more of the frame is roads
-      // vehicles can actually be seen driving on.
-      map.setCenter([-122.401, 37.775]);
+      map.setZoom(map.getZoom() + 1);
+      // Route-point density (sampled from sf-routes.json) peaks around the
+      // Union Square/Tenderloin border, not the bbox centroid — routes are
+      // drawn from the OSM node graph, and that area's tighter block grid
+      // has more nodes/intersections than SOMA's wide blocks, so more
+      // vehicles end up passing through this frame at any given time.
+      map.setCenter([-122.4095, 37.7815]);
 
       // Static scenery — a handful of real SF landmarks, purely illustrative,
       // giving the map a "somewhere with a purpose" feel. Added as native
@@ -215,6 +237,29 @@ export default function FleetMap() {
       if (cancelled) return;
 
       const buffers = new Map<string, TrackPoint[]>();
+      // Vehicle id -> the playback-clock time (a TrackPoint `t`, same clock
+      // `renderTime` advances on) its most recent gap event started freezing
+      // it at — drives the alert pulse's on/fade-out window.
+      const anomalies = new Map<string, number>();
+      // Vehicle id -> whether *last* poll's batch for it produced a gap event.
+      // poller.ts's GPS-loss offset is corrected on the following poll, which
+      // merge.ts also sees as an implausible-speed jump and flags `gap` —
+      // that correction is real (see poller.ts's own comment on it) but its
+      // hold is a single sample interval (~250ms, imperceptible), unlike the
+      // original glitch's multi-second freeze. Pulsing on it too just looks
+      // like the ring fired for no reason, since there's no visible stop to
+      // anchor it to — so it's excluded from anomalies below.
+      const glitchedLastBatch = new Map<string, boolean>();
+      // Vehicle id -> whether its *last* poll came back empty (DROP_CHANCE —
+      // a missed packet, merge.ts's `empty` event). While a vehicle is in
+      // this state, interpolateAt has nothing newer to interpolate toward,
+      // so it holds at its last point for up to a full poll interval; once
+      // data resumes, playback bridges the gap with a straight line to
+      // wherever the vehicle actually got to, not the road it actually took.
+      // That reads as the same kind of "this position is a guess, not real
+      // telemetry" moment as a GPS-loss `gap` (often with a longer hold), but
+      // merge.ts never flags it, so without this it never triggers a pulse.
+      const droppedLastBatch = new Map<string, boolean>();
 
       const renderVehicles: RenderVehicle[] = fleet.map((v) => ({
         id: v.id,
@@ -223,6 +268,9 @@ export default function FleetMap() {
         heading: v.points[0].heading,
         idle: v.idle,
       }));
+      // renderVehicles' objects are mutated in place each frame (see below),
+      // never replaced, so this lookup stays valid without rebuilding.
+      const renderVehicleById = new Map(renderVehicles.map((rv) => [rv.id, rv]));
 
       const movingCount = fleet.filter((v) => !v.idle).length;
       setStats({ total: fleet.length, moving: movingCount, idle: fleet.length - movingCount });
@@ -230,9 +278,11 @@ export default function FleetMap() {
       const rootStyle = getComputedStyle(document.documentElement);
       const accentHex = rootStyle.getPropertyValue('--accent').trim() || '#2dd4bf';
       const mutedHex = rootStyle.getPropertyValue('--text-muted').trim() || '#8b97a8';
+      const warnHex = rootStyle.getPropertyValue('--warn').trim() || '#f59e0b';
       const atlas = buildVehicleIconAtlas(accentHex, mutedHex);
       const accentRgb = hexToRgb(accentHex);
       const mutedRgb = hexToRgb(mutedHex);
+      const warnRgb = hexToRgb(warnHex);
 
       let frameTick = 0;
 
@@ -249,6 +299,51 @@ export default function FleetMap() {
           radiusUnits: 'pixels',
           updateTriggers: {
             getPosition: frameTick,
+          },
+        });
+      }
+
+      // Expanding, fading rings around any vehicle with a recent gap event —
+      // the visual flag for "this one's reporting bad/malformed data and may
+      // be off its true course". Several staggered rings per vehicle run
+      // concurrently so it reads as a continuous pulse rather than a single
+      // one-shot blink.
+      function buildPulseLayer(renderTime: number) {
+        const data: PulseRingDatum[] = [];
+        for (const [id, since] of anomalies) {
+          const age = renderTime - since;
+          if (age < 0 || age > ANOMALY_PULSE_DURATION_MS) continue;
+          const rv = renderVehicleById.get(id);
+          if (!rv) continue;
+
+          for (let ring = 0; ring < PULSE_RING_COUNT; ring++) {
+            const ringOffset = (ring * PULSE_RING_PERIOD_MS) / PULSE_RING_COUNT;
+            const phase = ((age + ringOffset) % PULSE_RING_PERIOD_MS) / PULSE_RING_PERIOD_MS;
+            data.push({
+              id: `${id}#${ring}`,
+              lat: rv.lat,
+              lng: rv.lng,
+              radius: PULSE_MIN_RADIUS_PX + phase * (PULSE_MAX_RADIUS_PX - PULSE_MIN_RADIUS_PX),
+              opacity: (1 - phase) * 220,
+            });
+          }
+        }
+
+        return new ScatterplotLayer<PulseRingDatum>({
+          id: 'anomaly-pulse',
+          data,
+          getPosition: (d) => [d.lng, d.lat],
+          getRadius: (d) => d.radius,
+          radiusUnits: 'pixels',
+          filled: false,
+          stroked: true,
+          getLineColor: (d) => [...warnRgb, d.opacity],
+          getLineWidth: 2,
+          lineWidthUnits: 'pixels',
+          updateTriggers: {
+            getPosition: frameTick,
+            getRadius: frameTick,
+            getLineColor: frameTick,
           },
         });
       }
@@ -337,7 +432,14 @@ export default function FleetMap() {
         });
       }
 
-      overlay.setProps({ layers: [buildTrailLayer(-PLAYBACK_DELAY_MS), buildVehicleGlowLayer(), buildVehicleLayer()] });
+      overlay.setProps({
+        layers: [
+          buildTrailLayer(-PLAYBACK_DELAY_MS),
+          buildVehicleGlowLayer(),
+          buildPulseLayer(-PLAYBACK_DELAY_MS),
+          buildVehicleLayer(),
+        ],
+      });
 
       const eventTotals = { gaps: 0, drops: 0, outliers: 0 };
       const tallyEvent: Partial<Record<MergeEvent, keyof typeof eventTotals>> = {
@@ -346,38 +448,69 @@ export default function FleetMap() {
         outlier: 'outliers',
       };
 
-      function applyBatch(batch: Map<string, TrackPoint[]>, cursorT: number) {
+      // `trackStats` is false only for the startup seed batch below — it
+      // runs through the same random-failure logic as a real poll (so the
+      // seeded buffer/pulses look plausible), but it represents invisible
+      // pre-mount history, not anything the viewer actually watched happen.
+      // Counting it would make the stat cards start at some nonzero number
+      // the instant the page loads, with no visible poll or map activity to
+      // explain it.
+      function applyBatch(batch: Map<string, TrackPoint[]>, cursorT: number, trackStats: boolean) {
         for (const [id, incoming] of batch) {
-          const { buffer: merged, events } = mergeTrackingPath(buffers.get(id) ?? [], incoming);
+          const previous = buffers.get(id) ?? [];
+          const { buffer: merged, events } = mergeTrackingPath(previous, incoming);
           buffers.set(id, trimBuffer(merged, cursorT, BUFFER_RETENTION_MS));
-          for (const event of events) {
-            const key = tallyEvent[event];
-            if (key) eventTotals[key]++;
+
+          const isFreshGap = events.includes('gap') && !glitchedLastBatch.get(id);
+          const isDropRecovery = droppedLastBatch.get(id) === true && !events.includes('empty');
+          if ((isFreshGap || isDropRecovery) && previous.length > 0) {
+            // Anchor the pulse to the *last known-good* point (`previous`'s
+            // tail), not the point where the discontinuity is finally
+            // resolved — interpolateAt (playback.ts) holds the vehicle right
+            // there the instant it can't trust what comes next, so this is
+            // when the vehicle actually freezes on screen. Keying off this
+            // timestamp (rather than `cursorT`, when merge detected it
+            // server-side ~PLAYBACK_DELAY_MS early, or the resolving point,
+            // which only fires once playback catches up) makes the ring
+            // appear right as the freeze starts, stay lit through the
+            // resolution, and fade out shortly after — spanning the whole
+            // "this vehicle's data is bad" window instead of only flashing
+            // at the tail end of it.
+            anomalies.set(id, previous[previous.length - 1].t);
+          }
+          glitchedLastBatch.set(id, events.includes('gap'));
+          droppedLastBatch.set(id, events.includes('empty'));
+          if (trackStats) {
+            for (const event of events) {
+              const key = tallyEvent[event];
+              if (key) eventTotals[key]++;
+            }
           }
         }
         rebuildTripsData();
-        setMergeStats({ ...eventTotals });
+        if (trackStats) setMergeStats({ ...eventTotals });
       }
 
       // Seed each vehicle's buffer with a window ending at t=0 (using
       // negative timestamps — a valid position on a looping route) so
       // playback has real data to interpolate through from frame one,
       // instead of freezing for the first PLAYBACK_DELAY_MS.
-      applyBatch(pollFleet(fleet, -PLAYBACK_DELAY_MS, 0), 0);
+      applyBatch(pollFleet(fleet, -PLAYBACK_DELAY_MS, 0), 0, false);
 
       const startTime = performance.now();
       let lastPollT = 0;
 
       function poll() {
         const nowT = performance.now() - startTime;
-        applyBatch(pollFleet(fleet, lastPollT, nowT), nowT);
+        applyBatch(pollFleet(fleet, lastPollT, nowT), nowT, true);
         lastPollT = nowT;
       }
 
       pollTimer = setInterval(poll, POLL_INTERVAL_MS);
 
       function frame() {
-        const renderTime = performance.now() - startTime - PLAYBACK_DELAY_MS;
+        const realNowT = performance.now() - startTime;
+        const renderTime = realNowT - PLAYBACK_DELAY_MS;
 
         for (const rv of renderVehicles) {
           const buffer = buffers.get(rv.id);
@@ -390,7 +523,14 @@ export default function FleetMap() {
         }
 
         frameTick++;
-        overlay.setProps({ layers: [buildTrailLayer(renderTime), buildVehicleGlowLayer(), buildVehicleLayer()] });
+        overlay.setProps({
+          layers: [
+            buildTrailLayer(renderTime),
+            buildVehicleGlowLayer(),
+            buildPulseLayer(renderTime),
+            buildVehicleLayer(),
+          ],
+        });
         animationFrame = requestAnimationFrame(frame);
       }
 
@@ -438,6 +578,10 @@ export default function FleetMap() {
           <span>
             <i className="fleet-dot fleet-dot-idle" />
             Idle
+          </span>
+          <span>
+            <i className="fleet-dot fleet-dot-anomaly" />
+            Signal loss
           </span>
         </div>
 

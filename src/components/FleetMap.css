@@ -133,6 +133,16 @@
   background: var(--text-muted);
 }
 
+.fleet-dot-anomaly {
+  background: var(--warn);
+  /* Two faint expanding rings around the center dot, standing in for the
+     map's animated concentric pulse (a static icon can't loop the real
+     expand-and-fade animation, so this reads as "rings", not motion). */
+  box-shadow:
+    0 0 0 2px rgba(245, 158, 11, 0.35),
+    0 0 0 4px rgba(245, 158, 11, 0.15);
+}
+
 /* MapLibre's own attribution control (compact mode) replaces the manual
    attribution div now that the basemap is real CARTO tiles instead of a
    hand-drawn roads layer — style it to fit the dark theme. This file is a

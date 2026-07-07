@@ -6,6 +6,7 @@
   --accent: #2dd4bf;
   --accent-ink: #06201c;
   --accent-soft: rgba(45, 212, 191, 0.12);
+  --warn: #f59e0b;
   --border: rgba(255, 255, 255, 0.09);
   --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
