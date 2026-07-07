@@ -9,47 +9,167 @@ const tags = ['MapLibre', 'deck.gl', 'React'];
     <h2>Featured work</h2>
 
     <article class="card">
-      <FleetMap client:visible />
+      <FleetMap client:idle />
 
       <div class="card-body">
         <h3>Fleet tracking at scale</h3>
         <p class="writeup">
-          A live fleet-tracking map rebuilding the core of a production dispatch system: ~5,000
-          vehicles moving along San Francisco's real street network, rendered with MapLibre GL and
-          deck.gl's IconLayer.
+          A live fleet-tracking map rebuilding the core of a production dispatch system: ~100
+          vehicles moving along San Francisco's real street network — the underlying pipeline and
+          rendering are built for thousands (see challenge 04); it's throttled here so individual
+          GPS quirks stay legible — rendered with MapLibre GL and deck.gl's IconLayer.
         </p>
 
-        <ul class="challenges">
-          <li>
-            <span class="challenge-index">01</span>
-            <strong>Stitching overlapping updates</strong>
-            <p>Periodic position updates redeliver already-seen data; deduped by timestamp so playback never rewinds or jumps.</p>
-          </li>
-          <li>
-            <span class="challenge-index">02</span>
-            <strong>Smoothing across update latency</strong>
-            <p>Rendering the latest known position as it arrived caused a freeze-then-snap between updates; fixed with a playback delay so there's always a real buffered window to interpolate through.</p>
-          </li>
-          <li>
-            <span class="challenge-index">03</span>
-            <strong>Rendering at scale</strong>
-            <p>Thousands of live-updating positions without stalling the browser, via GPU-based rendering and eliminating redundant per-vehicle work on every frame.</p>
-          </li>
-        </ul>
+        <div class="feature-block">
+          <span class="challenge-index">01</span>
+          <strong>Stitching a noisy tracking feed</strong>
+          <p>
+            Real position feeds aren't clean: polls come back empty, re-send an already-seen tail,
+            or — near tall buildings or in a tunnel — drift or drop out entirely. The merge step
+            dedupes re-sent points, holds through empty polls, rejects lone bad pings, and accepts
+            sustained relocations as real jumps:
+          </p>
+
+          <div class="diagram-tiles diagram-tiles-4">
+            <figure class="diagram-tile">
+              <svg class="diagram-svg" viewBox="0 0 200 100" role="img" aria-label="Diagram: an overlapping tail of already-seen points gets deduped by timestamp">
+                <path d="M80,45 Q105,32 130,45" class="dashed" />
+                <line x1="15" y1="60" x2="185" y2="60" class="baseline" />
+                <circle cx="30" cy="60" r="4" class="dot" />
+                <circle cx="60" cy="60" r="4" class="dot" />
+                <circle cx="90" cy="60" r="4" class="dot" />
+                <circle cx="120" cy="60" r="4" class="dot" />
+                <circle cx="150" cy="60" r="4" class="dot" />
+                <circle cx="170" cy="60" r="4" class="dot" />
+              </svg>
+              <figcaption><strong>Overlap</strong>Re-sent tail deduped by timestamp.</figcaption>
+            </figure>
+
+            <figure class="diagram-tile">
+              <svg class="diagram-svg" viewBox="0 0 200 100" role="img" aria-label="Diagram: an empty poll leaves the buffer holding at its last known point">
+                <line x1="15" y1="60" x2="70" y2="60" class="baseline" />
+                <circle cx="30" cy="60" r="4" class="dot" />
+                <circle cx="55" cy="60" r="4" class="dot" />
+                <circle cx="70" cy="60" r="8" class="pulse-ring" />
+                <circle cx="70" cy="60" r="13" class="pulse-ring" />
+                <line x1="70" y1="60" x2="120" y2="60" class="dashed" />
+                <line x1="120" y1="60" x2="180" y2="60" class="baseline" />
+                <circle cx="70" cy="60" r="4" class="dot" />
+                <circle cx="135" cy="60" r="4" class="dot" />
+                <circle cx="160" cy="60" r="4" class="dot" />
+                <circle cx="180" cy="60" r="4" class="dot" />
+              </svg>
+              <figcaption><strong>Empty poll</strong>No new data — playback holds.</figcaption>
+            </figure>
+
+            <figure class="diagram-tile">
+              <svg class="diagram-svg" viewBox="0 0 200 100" role="img" aria-label="Diagram: a sustained relocation after GPS loss is accepted as a jump and the trail breaks">
+                <line x1="15" y1="65" x2="70" y2="65" class="baseline" />
+                <circle cx="30" cy="65" r="4" class="dot" />
+                <circle cx="55" cy="65" r="4" class="dot" />
+                <path d="M70,65 L115,25" class="dashed-accent" />
+                <line x1="86" y1="52" x2="94" y2="40" class="break-tick" />
+                <line x1="78" y1="44" x2="86" y2="32" class="break-tick" />
+                <line x1="115" y1="25" x2="180" y2="25" class="baseline" />
+                <circle cx="115" cy="25" r="4" class="dot" />
+                <circle cx="145" cy="25" r="4" class="dot" />
+                <circle cx="180" cy="25" r="4" class="dot" />
+              </svg>
+              <figcaption><strong>GPS loss</strong>Sustained relocation — accepted jump, trail breaks.</figcaption>
+            </figure>
+
+            <figure class="diagram-tile">
+              <svg class="diagram-svg" viewBox="0 0 200 100" role="img" aria-label="Diagram: a lone bad ping is rejected while the path stays straight">
+                <line x1="15" y1="60" x2="185" y2="60" class="baseline" />
+                <circle cx="30" cy="60" r="4" class="dot" />
+                <circle cx="65" cy="60" r="4" class="dot" />
+                <circle cx="100" cy="60" r="4" class="dot" />
+                <circle cx="135" cy="60" r="4" class="dot" />
+                <circle cx="170" cy="60" r="4" class="dot" />
+                <line x1="100" y1="60" x2="100" y2="22" class="dashed" />
+                <circle cx="100" cy="18" r="5" class="dot-rejected" />
+                <line x1="96" y1="14" x2="104" y2="22" class="reject-mark" />
+                <line x1="104" y1="14" x2="96" y2="22" class="reject-mark" />
+              </svg>
+              <figcaption><strong>Bad ping</strong>Lone spike rejected — path stays straight.</figcaption>
+            </figure>
+          </div>
+        </div>
+
+        <div class="feature-block">
+          <span class="challenge-index">02</span>
+          <strong>Smoothing across update latency</strong>
+          <p>Rendering the latest known position as it arrived caused a freeze-then-snap between updates; fixed with a playback delay so there's always a real buffered window to interpolate through.</p>
+
+          <div class="diagram-tiles diagram-tiles-2">
+            <figure class="diagram-tile">
+              <svg class="diagram-svg" viewBox="0 0 400 100" role="img" aria-label="Diagram: rendering the live edge freezes at the last known point, then snaps forward when new data arrives">
+                <line x1="30" y1="60" x2="90" y2="60" class="baseline" />
+                <circle cx="44" cy="60" r="4" class="dot" />
+                <circle cx="76" cy="60" r="4" class="dot" />
+                <circle cx="90" cy="60" r="7" class="pulse-ring" />
+                <circle cx="90" cy="60" r="11" class="pulse-ring" />
+                <line x1="90" y1="60" x2="230" y2="60" class="dashed-accent" />
+                <line x1="230" y1="60" x2="370" y2="60" class="baseline" />
+                <circle cx="230" cy="60" r="4" class="dot" />
+                <circle cx="300" cy="60" r="4" class="dot" />
+                <circle cx="360" cy="60" r="4" class="dot" />
+              </svg>
+              <figcaption><strong>Live edge</strong>Renders latest position — freezes, then snaps forward.</figcaption>
+            </figure>
+
+            <figure class="diagram-tile">
+              <svg class="diagram-svg" viewBox="0 0 400 100" role="img" aria-label="Diagram: delayed playback always interpolates smoothly, with no freeze or snap">
+                <line x1="30" y1="60" x2="370" y2="60" class="baseline" />
+                <circle cx="54" cy="60" r="4" class="dot" />
+                <circle cx="102" cy="60" r="4" class="dot" />
+                <circle cx="150" cy="60" r="4" class="dot" />
+                <circle cx="198" cy="60" r="4" class="dot" />
+                <circle cx="246" cy="60" r="4" class="dot" />
+                <circle cx="294" cy="60" r="4" class="dot" />
+                <circle cx="342" cy="60" r="4" class="dot" />
+              </svg>
+              <figcaption><strong>Delayed playback</strong>Always a real buffered window to interpolate through.</figcaption>
+            </figure>
+          </div>
+        </div>
+
+        <div class="feature-block">
+          <span class="challenge-index">03</span>
+          <strong>Keeping the UI responsive at startup</strong>
+          <p>Parsing the initial fleet dataset and building vehicle records — up to 5,000 in the full system, 100 here — is heavy synchronous work that would otherwise hang the page while it loads; moved off the main thread into a Web Worker.</p>
+
+          <div class="diagram-tiles diagram-tiles-2">
+            <figure class="diagram-tile">
+              <svg class="diagram-svg" viewBox="0 0 400 100" role="img" aria-label="Diagram: parsing the fleet dataset blocks the main thread for the entire load">
+                <line x1="30" y1="51" x2="370" y2="51" class="dashed" />
+                <rect x="30" y="43" width="340" height="16" rx="3" class="busy" />
+              </svg>
+              <figcaption><strong>Blocking</strong>Parsing thousands of records hangs the page on load.</figcaption>
+            </figure>
+
+            <figure class="diagram-tile">
+              <svg class="diagram-svg" viewBox="0 0 400 100" role="img" aria-label="Diagram: after a brief handoff, a Web Worker parses off-thread while the main thread stays free">
+                <rect x="30" y="35" width="36" height="10" rx="2" class="busy" />
+                <line x1="66" y1="40" x2="370" y2="40" class="idle" />
+                <line x1="66" y1="45" x2="66" y2="62" class="dashed" />
+                <rect x="66" y="62" width="180" height="14" rx="3" class="worker" />
+              </svg>
+              <figcaption><strong>Off-thread</strong>Handed to a Web Worker after a brief handoff.</figcaption>
+            </figure>
+          </div>
+        </div>
+
+        <div class="feature-block">
+          <span class="challenge-index">04</span>
+          <strong>Rendering at scale</strong>
+          <p>DOM-based markers (one element per vehicle, repositioned every frame) stop scaling past a few hundred vehicles; moved to GPU-based instanced rendering (deck.gl's IconLayer) to handle thousands without stalling the browser. Tested up to 5,000 (this demo's previous fleet size) — likely scales further, just not verified past that. Runs 100 here so individual behavior stays visible.</p>
+        </div>
 
         <div class="card-footer">
           <ul class="tags">
             {tags.map((tag) => <li>{tag}</li>)}
           </ul>
-
-          <a
-            class="btn btn-solid"
-            href="https://github.com/adventofryz/adventofryz/tree/main/src/components/fleet"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Source code
-          </a>
         </div>
       </div>
     </article>
@@ -92,22 +212,14 @@ const tags = ['MapLibre', 'deck.gl', 'React'];
     margin: 0 0 1.75rem;
   }
 
-  .challenges {
-    list-style: none;
-    padding: 0;
-    margin: 0 0 1.75rem;
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 1.25rem;
-  }
-
-  .challenges li {
+  .feature-block {
     border: 1px solid var(--border);
     border-radius: 10px;
-    padding: 1rem;
+    padding: 1.25rem;
+    margin: 0 0 1.25rem;
   }
 
-  .challenge-index {
+  .feature-block .challenge-index {
     display: block;
     font-family: var(--font-mono);
     font-size: 0.75rem;
@@ -115,24 +227,147 @@ const tags = ['MapLibre', 'deck.gl', 'React'];
     margin-bottom: 0.5rem;
   }
 
-  .challenges strong {
+  .feature-block strong {
     display: block;
     color: var(--text);
-    font-size: 0.9rem;
+    font-size: 0.95rem;
     margin-bottom: 0.4rem;
   }
 
-  .challenges p {
+  .feature-block p {
     color: var(--text-muted);
     font-size: 0.85rem;
     line-height: 1.5;
+    max-width: 68ch;
     margin: 0;
   }
 
-  @media (max-width: 720px) {
-    .challenges {
+  .feature-block > p {
+    margin: 0 0 1.25rem;
+  }
+
+  .diagram-tiles {
+    display: grid;
+    gap: 1rem;
+  }
+
+  .diagram-tiles-4 {
+    grid-template-columns: repeat(4, 1fr);
+  }
+
+  .diagram-tiles-2 {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  @media (max-width: 860px) {
+    .diagram-tiles-4 {
+      grid-template-columns: repeat(2, 1fr);
+    }
+  }
+
+  @media (max-width: 480px) {
+    .diagram-tiles-4,
+    .diagram-tiles-2 {
       grid-template-columns: 1fr;
     }
+  }
+
+  .diagram-tile {
+    margin: 0;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.6rem;
+    background: var(--bg);
+  }
+
+  .diagram-tile figcaption {
+    margin-top: 0.5rem;
+    font-size: 0.75rem;
+    line-height: 1.4;
+    color: var(--text-muted);
+  }
+
+  .diagram-tile figcaption strong {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text);
+    margin-bottom: 0.2rem;
+  }
+
+  .diagram-svg {
+    display: block;
+    width: 100%;
+    height: auto;
+  }
+
+  .diagram-svg .divider {
+    stroke: var(--border);
+    stroke-width: 1;
+  }
+
+  .diagram-svg .baseline {
+    stroke: var(--accent);
+    stroke-width: 2;
+    fill: none;
+  }
+
+  .diagram-svg .dot {
+    fill: var(--accent);
+  }
+
+  .diagram-svg .dot-rejected {
+    fill: var(--bg-elevated);
+    stroke: var(--text-muted);
+    stroke-width: 1.5;
+  }
+
+  .diagram-svg .pulse-ring {
+    fill: none;
+    stroke: var(--text-muted);
+    stroke-width: 1;
+    stroke-dasharray: 2 2;
+    opacity: 0.6;
+  }
+
+  .diagram-svg .dashed {
+    stroke: var(--text-muted);
+    stroke-width: 1.5;
+    stroke-dasharray: 4 3;
+    fill: none;
+  }
+
+  .diagram-svg .dashed-accent {
+    stroke: var(--accent);
+    stroke-width: 2;
+    stroke-dasharray: 5 4;
+    fill: none;
+  }
+
+  .diagram-svg .break-tick,
+  .diagram-svg .reject-mark {
+    stroke: var(--text-muted);
+    stroke-width: 1.5;
+  }
+
+  .diagram-svg .busy {
+    fill: var(--text-muted);
+    opacity: 0.35;
+    stroke: var(--text-muted);
+    stroke-width: 1;
+  }
+
+  .diagram-svg .idle {
+    stroke: var(--accent);
+    stroke-width: 2;
+  }
+
+  .diagram-svg .worker {
+    fill: var(--accent-soft);
+    stroke: var(--accent);
+    stroke-width: 1.5;
   }
 
   .card-footer {
@@ -162,27 +397,5 @@ const tags = ['MapLibre', 'deck.gl', 'React'];
     background: var(--accent-soft);
     border-radius: 999px;
     padding: 0.25rem 0.75rem;
-  }
-
-  .btn {
-    display: inline-flex;
-    align-items: center;
-    text-decoration: none;
-    font-size: 0.9rem;
-    padding: 0.55rem 1.1rem;
-    border-radius: 8px;
-    transition: opacity 150ms ease;
-    white-space: nowrap;
-  }
-
-  .btn-solid {
-    color: var(--accent-ink);
-    background: var(--accent);
-    font-weight: 600;
-  }
-
-  .btn-solid:hover,
-  .btn-solid:focus-visible {
-    opacity: 0.9;
   }
 </style>

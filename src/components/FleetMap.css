@@ -1,25 +1,41 @@
-.fleet-demo {
-  opacity: 0;
-  transform: translateY(8px);
-  transition: opacity 400ms ease-out, transform 400ms ease-out;
+.fleet-map-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  background: var(--bg);
+  color: var(--text-muted);
+  font-size: 0.85rem;
 }
 
-.fleet-demo-ready {
-  opacity: 1;
-  transform: translateY(0);
+.fleet-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 999px;
+  animation: fleet-spin 700ms linear infinite;
+}
+
+@keyframes fleet-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .fleet-demo {
-    opacity: 1;
-    transform: none;
-    transition: none;
+  .fleet-spinner {
+    animation: none;
   }
 }
 
 .fleet-stats {
   display: flex;
-  gap: 2rem;
+  flex-wrap: wrap;
+  gap: 1.5rem 2rem;
   padding: 1rem 1.5rem;
   border-bottom: 1px solid var(--border);
 }

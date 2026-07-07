@@ -18,6 +18,12 @@ export function interpolateAt(buffer: TrackPoint[], t: number): RoutePoint | nul
     const a = buffer[i];
     const b = buffer[i + 1];
     if (t >= a.t && t <= b.t) {
+      // `b` is the first point after a detected GPS-loss discontinuity —
+      // gliding smoothly from `a` to `b` would draw a fake straight line
+      // through whatever's actually there (buildings, the tunnel itself).
+      // Hold at `a` until the real jump happens, then snap.
+      if (b.gap) return t >= b.t ? b : a;
+
       const span = b.t - a.t || 1;
       const frac = (t - a.t) / span;
       return {

@@ -4,13 +4,13 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { MapboxOverlay } from '@deck.gl/mapbox';
 import { IconLayer, ScatterplotLayer } from '@deck.gl/layers';
 import { TripsLayer } from '@deck.gl/geo-layers';
-import { createFleet } from './fleet/simulate';
-import { pollFleet, buildMetadata } from './fleet/poller';
-import { mergeTrackingPath, trimBuffer } from './fleet/merge';
+import type { FleetVehicle } from './fleet/simulate';
+import { pollFleet } from './fleet/poller';
+import { mergeTrackingPath, trimBuffer, type MergeEvent } from './fleet/merge';
 import { interpolateAt } from './fleet/playback';
 import { buildVehicleIconAtlas } from './fleet/icons';
 import { POIS } from './fleet/pois';
-import type { RoutePoint, TrackPoint, VehicleMeta } from './fleet/types';
+import type { TrackPoint, VehicleMeta } from './fleet/types';
 import './FleetMap.css';
 
 // Same bbox scripts/build-fleet-data.mjs generated the road/route data from —
@@ -20,7 +20,10 @@ const SF_BOUNDS: [[number, number], [number, number]] = [
   [-122.377, 37.798],
 ];
 
-const TARGET_VEHICLE_COUNT = 5000;
+// Small enough that individual vehicle behavior (a jump, a pause, a rejected
+// spike) reads clearly on the map — the system underneath is built to handle
+// thousands, but showing 5,000 of them just reads as a congested blob.
+const TARGET_VEHICLE_COUNT = 100;
 
 // The real system delivers a new trackingPath roughly every 10s. Rendering is
 // intentionally delayed behind that by a bit more than one poll interval, so
@@ -76,6 +79,7 @@ function hexToRgb(hex: string): [number, number, number] {
 export default function FleetMap() {
   const containerRef = useRef<HTMLDivElement>(null);
   const [stats, setStats] = useState({ total: 0, moving: 0, idle: 0 });
+  const [mergeStats, setMergeStats] = useState({ gaps: 0, drops: 0, outliers: 0 });
   const [selected, setSelected] = useState<Selected | null>(null);
   const [ready, setReady] = useState(false);
 
@@ -86,6 +90,7 @@ export default function FleetMap() {
     let cancelled = false;
     let animationFrame = 0;
     let pollTimer: ReturnType<typeof setInterval> | undefined;
+    let worker: Worker | undefined;
 
     const map = new maplibregl.Map({
       container,
@@ -101,23 +106,21 @@ export default function FleetMap() {
       // CSS aspect-ratio box may not have its final size yet when the map
       // is constructed, which previously caused it to fit to a wrong
       // guessed size (roads rendering as a small centered island instead
-      // of filling the view). Hiding the component until this fires (see
-      // .fleet-demo-ready below) also means nobody sees that wrong fit.
+      // of filling the view). The loading spinner covers the map until this
+      // fires, so nobody sees that wrong fit either.
       map.fitBounds(SF_BOUNDS, { padding: 12, duration: 0 });
       // Lock how far out you can zoom (to the initial fit) and how far you
       // can pan, so there's no way to end up staring at blank space outside
       // the road network — zooming in further is still unrestricted.
       map.setMinZoom(map.getZoom());
       map.setMaxBounds(SF_BOUNDS);
-      // The default view zooms in past that full-bbox fit — at 5,000
-      // vehicles, showing the entire area by default reads as one congested
-      // blob, and the fading trails (a few dozen meters long) are too small
-      // to read as lines rather than dots. Zoomed in close enough to see
-      // individual trails; zooming out to see the full spread (up to the
-      // minZoom lock above) is still available. Priority/collision-based
-      // decluttering is the real fix for the density problem, planned as a
-      // follow-up.
-      map.setZoom(map.getZoom() + 4);
+      // The default view zooms in past that full-bbox fit — at 100 vehicles
+      // there's no density/blob problem left, but the fading trails (a few
+      // dozen meters long) and the occasional GPS-loss jump are still too
+      // small to read at the full-bbox scale. A modest bump keeps individual
+      // paths legible; zooming out to see the full spread (up to the minZoom
+      // lock above) is still available.
+      map.setZoom(map.getZoom() + 2);
       // The bbox's centroid (default fitBounds center) lands in the
       // Union Square/Financial District core, which at this zoom is mostly
       // dense building blocks rather than visible road grid. SOMA has wider
@@ -190,11 +193,27 @@ export default function FleetMap() {
     map.addControl(overlay as unknown as maplibregl.IControl);
 
     async function setup() {
-      const routes: RoutePoint[][] = await fetch('/data/sf-routes.json').then((r) => r.json());
+      // Fetching + parsing the ~4MB route file and building 5,000 vehicles
+      // (fleet.worker.ts) runs off the main thread — this was blocking work
+      // happening right as the demo mounted, competing with page scroll/UI.
+      worker = new Worker(new URL('./fleet/fleet.worker.ts', import.meta.url), { type: 'module' });
+
+      const { fleet, metadata } = await new Promise<{
+        fleet: FleetVehicle[];
+        metadata: Map<string, VehicleMeta>;
+      }>((resolve, reject) => {
+        worker!.onmessage = (e: MessageEvent<{ fleet: FleetVehicle[]; metadata: [string, VehicleMeta][] }>) => {
+          resolve({ fleet: e.data.fleet, metadata: new Map(e.data.metadata) });
+        };
+        worker!.onerror = reject;
+        worker!.postMessage({ targetCount: TARGET_VEHICLE_COUNT });
+      });
+
+      worker.terminate();
+      worker = undefined;
+
       if (cancelled) return;
 
-      const fleet = createFleet(routes, TARGET_VEHICLE_COUNT);
-      const metadata = buildMetadata(fleet);
       const buffers = new Map<string, TrackPoint[]>();
 
       const renderVehicles: RenderVehicle[] = fleet.map((v) => ({
@@ -242,14 +261,31 @@ export default function FleetMap() {
       let tripsData: TripDatum[] = [];
 
       function rebuildTripsData() {
-        tripsData = renderVehicles.map((rv) => {
+        tripsData = renderVehicles.flatMap((rv) => {
           const buffer = buffers.get(rv.id) ?? [];
-          return {
-            id: rv.id,
-            path: buffer.map((p): [number, number] => [p.lng, p.lat]),
-            timestamps: buffer.map((p) => p.t),
-            idle: rv.idle,
-          };
+
+          // Split on `gap` boundaries — a GPS-loss jump is a real
+          // discontinuity, so the trail must break there rather than
+          // TripsLayer drawing a fake straight line across it.
+          const segments: TrackPoint[][] = [];
+          let current: TrackPoint[] = [];
+          for (const p of buffer) {
+            if (p.gap && current.length > 0) {
+              segments.push(current);
+              current = [];
+            }
+            current.push(p);
+          }
+          if (current.length > 0) segments.push(current);
+
+          return segments.map(
+            (segment, i): TripDatum => ({
+              id: `${rv.id}#${i}`,
+              path: segment.map((p): [number, number] => [p.lng, p.lat]),
+              timestamps: segment.map((p) => p.t),
+              idle: rv.idle,
+            }),
+          );
         });
       }
 
@@ -303,12 +339,24 @@ export default function FleetMap() {
 
       overlay.setProps({ layers: [buildTrailLayer(-PLAYBACK_DELAY_MS), buildVehicleGlowLayer(), buildVehicleLayer()] });
 
+      const eventTotals = { gaps: 0, drops: 0, outliers: 0 };
+      const tallyEvent: Partial<Record<MergeEvent, keyof typeof eventTotals>> = {
+        gap: 'gaps',
+        empty: 'drops',
+        outlier: 'outliers',
+      };
+
       function applyBatch(batch: Map<string, TrackPoint[]>, cursorT: number) {
         for (const [id, incoming] of batch) {
-          const merged = mergeTrackingPath(buffers.get(id) ?? [], incoming);
+          const { buffer: merged, events } = mergeTrackingPath(buffers.get(id) ?? [], incoming);
           buffers.set(id, trimBuffer(merged, cursorT, BUFFER_RETENTION_MS));
+          for (const event of events) {
+            const key = tallyEvent[event];
+            if (key) eventTotals[key]++;
+          }
         }
         rebuildTripsData();
+        setMergeStats({ ...eventTotals });
       }
 
       // Seed each vehicle's buffer with a window ending at t=0 (using
@@ -353,6 +401,7 @@ export default function FleetMap() {
 
     return () => {
       cancelled = true;
+      worker?.terminate();
       if (pollTimer) clearInterval(pollTimer);
       cancelAnimationFrame(animationFrame);
       map.remove();
@@ -360,16 +409,26 @@ export default function FleetMap() {
   }, []);
 
   return (
-    <div className={`fleet-demo${ready ? ' fleet-demo-ready' : ''}`}>
+    <div className="fleet-demo">
       <div className="fleet-stats">
         <Stat label="Total" value={stats.total} />
         <Stat label="Moving" value={stats.moving} tone="moving" />
         <Stat label="Idle" value={stats.idle} tone="idle" />
+        <Stat label="Gaps bridged" value={mergeStats.gaps} tone="idle" />
+        <Stat label="Drops" value={mergeStats.drops} tone="idle" />
+        <Stat label="Spikes rejected" value={mergeStats.outliers} tone="idle" />
       </div>
 
       <div className="fleet-map-wrap">
         <span className="fleet-badge">Live demo</span>
         <div ref={containerRef} className="fleet-map" />
+
+        {!ready && (
+          <div className="fleet-map-loading">
+            <span className="fleet-spinner" />
+            Loading map&hellip;
+          </div>
+        )}
 
         <div className="fleet-legend">
           <span>
