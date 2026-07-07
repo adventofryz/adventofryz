@@ -17,7 +17,8 @@ const tags = ['MapLibre', 'deck.gl', 'React'];
           A live fleet-tracking map rebuilding the core of a production dispatch system: ~100
           vehicles moving along San Francisco's real street network — the underlying pipeline and
           rendering are built for thousands (see challenge 04); it's throttled here so individual
-          GPS quirks stay legible — rendered with MapLibre GL and deck.gl's IconLayer.
+          GPS quirks stay legible — rendered with MapLibre GL and deck.gl's IconLayer, with vehicle
+          icons drawn as a tiny in-memory canvas atlas rather than loaded image assets.
         </p>
 
         <div class="feature-block">
@@ -94,6 +95,11 @@ const tags = ['MapLibre', 'deck.gl', 'React'];
               <figcaption><strong>Bad ping</strong>Lone spike rejected — path stays straight.</figcaption>
             </figure>
           </div>
+
+          <p class="feature-note">
+            An accepted jump also triggers a staggered warning pulse on that vehicle until its next
+            report resolves it.
+          </p>
         </div>
 
         <div class="feature-block">
@@ -244,6 +250,12 @@ const tags = ['MapLibre', 'deck.gl', 'React'];
 
   .feature-block > p {
     margin: 0 0 1.25rem;
+  }
+
+  .feature-block > p.feature-note {
+    margin: 0.85rem 0 0;
+    font-size: 0.78rem;
+    opacity: 0.75;
   }
 
   .diagram-tiles {
