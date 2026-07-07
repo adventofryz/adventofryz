@@ -10,9 +10,16 @@ export interface FleetVehicle {
   startOffsetMeters: number; // phase offset so clones of the same route aren't in lockstep
   direction: 1 | -1;
   idle: boolean;
+  // A small subset of vehicles with a persistently bad connection (old
+  // hardware, poor antenna placement) — see poller.ts's elevated failure
+  // rates. Concentrating failures onto a few vehicles reads as "these
+  // particular cars have a problem" rather than the whole fleet being
+  // unreliable.
+  flaky: boolean;
 }
 
 const IDLE_RATIO = 0.15;
+const FLAKY_RATIO = 0.05;
 const MIN_SPEED_MPS = 4; // ~14 km/h city driving
 const MAX_SPEED_MPS = 14; // ~50 km/h
 const JITTER_RADIUS_M = 12; // keeps clones visually distinct without leaving the road
@@ -46,6 +53,7 @@ export function createFleet(routes: RoutePoint[][], targetCount: number): FleetV
       const dy = Math.sin(angle) * radius;
 
       const points = route.map((p) => ({ ...offsetMeters(p, dx, dy), heading: p.heading }));
+      const idle = Math.random() < IDLE_RATIO;
 
       fleet.push({
         id: `VH-${(id++).toString().padStart(4, '0')}`,
@@ -55,7 +63,10 @@ export function createFleet(routes: RoutePoint[][], targetCount: number): FleetV
         speedMps: MIN_SPEED_MPS + Math.random() * (MAX_SPEED_MPS - MIN_SPEED_MPS),
         startOffsetMeters: Math.random() * totalDistance,
         direction: Math.random() < 0.5 ? 1 : -1,
-        idle: Math.random() < IDLE_RATIO,
+        idle,
+        // Idle vehicles never poll for failures (see poller.ts), so being
+        // flaky as well as idle would just do nothing.
+        flaky: !idle && Math.random() < FLAKY_RATIO,
       });
     }
   }

@@ -9,20 +9,28 @@ import type { TrackPoint, VehicleMeta } from './types';
 export const SAMPLE_INTERVAL_MS = 500;
 export const OVERLAP_MS = 1500;
 
-// Per-poll odds of each failure mode (moving vehicles only), calibrated
-// against real telematics failure rates rather than picked for visual
-// density:
-//   - DROP: a missed report from an ordinary cellular hiccup (~99.5%
-//     delivery reliability).
+// Per-poll odds of each failure mode for the ~95% of moving vehicles with a
+// good connection — kept low enough that these barely ever happen:
+//   - DROP: a missed report from an ordinary cellular hiccup.
 //   - OUTLIER: a lone multipath-reflected ping (tall buildings, urban
-//     canyons) that self-corrects — more common than losing the fix outright.
+//     canyons) that self-corrects.
 //   - GPS_LOSS: signal lost long enough to relocate on reacquisition —
 //     needs real physical obstruction (tunnel, garage), so it's the rarest.
 // GPS_LOSS and OUTLIER are the two that can visibly teleport a vehicle off
 // its route.
-const DROP_CHANCE = 0.005;
-const GPS_LOSS_CHANCE = 0.0015;
-const OUTLIER_CHANCE = 0.003;
+const DROP_CHANCE = 0.001;
+const GPS_LOSS_CHANCE = 0.0003;
+const OUTLIER_CHANCE = 0.0006;
+
+// Applied instead of the rates above for FleetVehicle.flaky vehicles (see
+// simulate.ts) — a persistently bad connection (old hardware, poor antenna
+// placement), not just bad luck. High enough that the same handful of
+// vehicles visibly misbehave over and over, which is most of what drives
+// the gaps/drops stats — while the rest of the fleet stays clean rather
+// than every vehicle looking equally unreliable.
+const DROP_CHANCE_FLAKY = 0.1;
+const GPS_LOSS_CHANCE_FLAKY = 0.045;
+const OUTLIER_CHANCE_FLAKY = 0.06;
 
 // Fraction of the sample window a GPS-loss poll swallows from the front —
 // the "underground" stretch it couldn't report during.
@@ -51,12 +59,12 @@ export function pollFleet(fleet: FleetVehicle[], sinceT: number, nowT: number): 
       continue;
     }
 
-    if (Math.random() < DROP_CHANCE) {
+    if (Math.random() < (vehicle.flaky ? DROP_CHANCE_FLAKY : DROP_CHANCE)) {
       batch.set(vehicle.id, []);
       continue;
     }
 
-    const gpsLoss = Math.random() < GPS_LOSS_CHANCE;
+    const gpsLoss = Math.random() < (vehicle.flaky ? GPS_LOSS_CHANCE_FLAKY : GPS_LOSS_CHANCE);
     const sampleStart = gpsLoss ? windowStart + (nowT - windowStart) * GPS_LOSS_FRACTION : windowStart;
 
     const points: TrackPoint[] = [];
@@ -74,7 +82,8 @@ export function pollFleet(fleet: FleetVehicle[], sinceT: number, nowT: number): 
       }
     }
 
-    if (!gpsLoss && points.length > 2 && Math.random() < OUTLIER_CHANCE) {
+    const outlierChance = vehicle.flaky ? OUTLIER_CHANCE_FLAKY : OUTLIER_CHANCE;
+    if (!gpsLoss && points.length > 2 && Math.random() < outlierChance) {
       const i = 1 + Math.floor(Math.random() * (points.length - 2));
       const angle = Math.random() * Math.PI * 2;
       const flung = offsetMeters(points[i], Math.cos(angle) * OUTLIER_OFFSET_M, Math.sin(angle) * OUTLIER_OFFSET_M);

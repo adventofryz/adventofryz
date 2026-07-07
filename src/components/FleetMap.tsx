@@ -8,7 +8,6 @@ import type { FleetVehicle } from './fleet/simulate';
 import { pollFleet } from './fleet/poller';
 import { mergeTrackingPath, trimBuffer, type MergeEvent } from './fleet/merge';
 import { interpolateAt } from './fleet/playback';
-import { haversineMeters } from './fleet/geo';
 import { buildVehicleIconAtlas } from './fleet/icons';
 import { POIS } from './fleet/pois';
 import type { TrackPoint, VehicleMeta } from './fleet/types';
@@ -34,10 +33,6 @@ const BUFFER_RETENTION_MS = PLAYBACK_DELAY_MS + POLL_INTERVAL_MS + 5000;
 // How far back the fading trail reaches behind each vehicle.
 const TRAIL_LENGTH_MS = 8000;
 
-// Samples are 500ms apart at up to 14 m/s (~7m) — anything past this is a
-// simulated failure jump (GPS loss, dropped-poll bridge, etc.), which is
-// what the pulse flags.
-const TELEPORT_DISTANCE_M = 50;
 // Outlasts a dropped-poll freeze's ~8.5s median hold (measured), so the
 // ring doesn't fade before the freeze even resolves.
 const ANOMALY_PULSE_DURATION_MS = 9000;
@@ -527,9 +522,13 @@ export default function FleetMap() {
           buffers.set(id, trimBuffer(merged, cursorT, BUFFER_RETENTION_MS));
 
           // Scans only the newly-appended range — older pairs were already
-          // checked when they first appeared.
+          // checked when they first appeared. Keyed off merge.ts's own
+          // `gap` flag (the same one playback.ts snaps on), not a separate
+          // distance check — a raw haversine threshold on its own also
+          // flags the merely-longer-than-usual (but still smooth) segment
+          // after an ordinary dropped poll, which isn't a real relocation.
           for (let i = Math.max(previous.length - 1, 0); i < merged.length - 1; i++) {
-            if (haversineMeters(merged[i], merged[i + 1]) > TELEPORT_DISTANCE_M) {
+            if (merged[i + 1].gap) {
               // Anchored to the point *before* the jump — interpolateAt
               // holds the vehicle there until playback catches up, so
               // that's when the freeze actually starts on screen (using
@@ -628,9 +627,24 @@ export default function FleetMap() {
         <Stat label="Total" value={stats.total} />
         <Stat label="Moving" value={stats.moving} tone="moving" />
         <Stat label="Idle" value={stats.idle} tone="idle" />
-        <Stat label="Gaps bridged" value={mergeStats.gaps} tone="idle" />
-        <Stat label="Drops" value={mergeStats.drops} tone="idle" />
-        <Stat label="Spikes rejected" value={mergeStats.outliers} tone="idle" />
+        <Stat
+          label="Gaps bridged"
+          value={mergeStats.gaps}
+          tone="idle"
+          hint="The car reported a real jump to a new location and stayed there — accepted as a genuine move, not a glitch."
+        />
+        <Stat
+          label="Drops"
+          value={mergeStats.drops}
+          tone="idle"
+          hint="The car missed a check-in. Instead of guessing, we hold its last known position until it reports again."
+        />
+        <Stat
+          label="Spikes rejected"
+          value={mergeStats.outliers}
+          tone="idle"
+          hint="One bad reading flickered off-course, then immediately corrected itself — we filter it out instead of trusting it."
+        />
       </div>
 
       <div className="fleet-map-wrap">
@@ -700,11 +714,25 @@ export default function FleetMap() {
   );
 }
 
-function Stat({ label, value, tone }: { label: string; value: number; tone?: 'moving' | 'idle' }) {
+function Stat({ label, value, tone, hint }: { label: string; value: number; tone?: 'moving' | 'idle'; hint?: string }) {
   return (
-    <div className="fleet-stat">
+    <div className={`fleet-stat${hint ? ' fleet-stat-has-hint' : ''}`} tabIndex={hint ? 0 : undefined}>
       <span className={`fleet-stat-value${tone ? ` fleet-stat-${tone}` : ''}`}>{value.toLocaleString()}</span>
-      <span className="fleet-stat-label">{label}</span>
+      <span className="fleet-stat-label">
+        {label}
+        {hint && (
+          <svg className="fleet-stat-hint-icon" viewBox="0 0 16 16" aria-hidden="true">
+            <circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" strokeWidth="1.4" />
+            <circle cx="8" cy="4.6" r="1" fill="currentColor" />
+            <line x1="8" y1="7.2" x2="8" y2="11.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+          </svg>
+        )}
+      </span>
+      {hint && (
+        <span className="fleet-stat-tooltip" role="tooltip">
+          {hint}
+        </span>
+      )}
     </div>
   );
 }
