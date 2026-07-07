@@ -1,12 +1,9 @@
 /// <reference lib="webworker" />
 
-// Offloads the heavy one-time setup work — fetching + parsing the ~4MB route
-// file and building the 5,000-vehicle fleet (cloning routes, computing
-// distances) — off the main thread. This was blocking work happening right
-// when the demo mounts; the per-frame render loop and the poll/merge logic
-// still run on the main thread (they have to — MapLibre/deck.gl need a real
-// WebGL canvas, which workers can't provide) but the initial burst no longer
-// competes with the page's own responsiveness.
+// Offloads the one-time setup — fetching the route file and building the
+// fleet — off the main thread, so it doesn't compete with page load. The
+// render loop and poll/merge logic stay on the main thread since
+// MapLibre/deck.gl need a real WebGL canvas, which workers can't provide.
 
 import { createFleet } from './simulate';
 import { buildMetadata } from './poller';

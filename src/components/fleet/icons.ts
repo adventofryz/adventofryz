@@ -16,11 +16,9 @@ export interface IconAtlas {
 // downscaling stays crisp rather than sampling a low-res source.
 const ICON_SIZE = 64;
 
-// A chevron with a concave back — the standard "heading/direction" marker
-// shape used by Google Maps' location arrow and most fleet-tracking UIs —
-// reads as "pointing somewhere" far more clearly than a plain triangle. The
-// dark outline keeps it legible against whatever color the basemap renders
-// underneath (roads, parks, water all vary on a real map tile).
+// Chevron with a concave back — the standard heading marker (Google Maps'
+// location arrow, most fleet UIs) — reads as "pointing somewhere" better
+// than a plain triangle. Dark outline keeps it legible over any basemap color.
 function drawVehicleIcon(ctx: CanvasRenderingContext2D, offsetX: number, color: string) {
   const cx = offsetX + ICON_SIZE / 2;
   const cy = ICON_SIZE / 2;
@@ -43,9 +41,9 @@ function drawVehicleIcon(ctx: CanvasRenderingContext2D, offsetX: number, color: 
   ctx.stroke();
 }
 
-// Builds a tiny in-memory icon atlas (two chevrons) for deck.gl's IconLayer —
-// no external image asset needed. Colors are passed in so they stay in sync
-// with the site's CSS custom properties instead of being duplicated here.
+// Tiny in-memory icon atlas (two chevrons) for deck.gl's IconLayer — no
+// external asset needed. Colors are passed in to stay in sync with the
+// site's CSS custom properties.
 export function buildVehicleIconAtlas(movingColor: string, idleColor: string): IconAtlas {
   const canvas = document.createElement('canvas');
   canvas.width = ICON_SIZE * 2;

@@ -8,29 +8,25 @@ import type { FleetVehicle } from './fleet/simulate';
 import { pollFleet } from './fleet/poller';
 import { mergeTrackingPath, trimBuffer, type MergeEvent } from './fleet/merge';
 import { interpolateAt } from './fleet/playback';
+import { haversineMeters } from './fleet/geo';
 import { buildVehicleIconAtlas } from './fleet/icons';
 import { POIS } from './fleet/pois';
 import type { TrackPoint, VehicleMeta } from './fleet/types';
 import './FleetMap.css';
 
-// Same bbox scripts/build-fleet-data.mjs generated the road/route data from —
-// [[west, south], [east, north]].
+// [[west, south], [east, north]] — matches the bbox build-fleet-data.mjs used.
 const SF_BOUNDS: [[number, number], [number, number]] = [
   [-122.439, 37.768],
   [-122.377, 37.798],
 ];
 
-// Small enough that individual vehicle behavior (a jump, a pause, a rejected
-// spike) reads clearly on the map — the system underneath is built to handle
-// thousands, but showing 5,000 of them just reads as a congested blob.
+// Kept small so individual vehicle behavior stays legible — the pipeline
+// scales to thousands, but that just reads as a congested blob.
 const TARGET_VEHICLE_COUNT = 100;
 
-// The real system delivers a new trackingPath roughly every 10s. Rendering is
-// intentionally delayed behind that by a bit more than one poll interval, so
-// playback always has two real buffered points to interpolate between —
-// never the live edge. Without this, the render clock races ahead of the
-// buffer between polls, freezes at the last known point, then snaps forward
-// once the next batch arrives (the "teleporting" bug).
+// Playback trails the poll clock by just over one interval so there's
+// always a real buffered point ahead to interpolate toward — rendering the
+// live edge instead freezes between polls, then snaps ("teleporting").
 const POLL_INTERVAL_MS = 10000;
 const PLAYBACK_DELAY_MS = POLL_INTERVAL_MS + 1000;
 const BUFFER_RETENTION_MS = PLAYBACK_DELAY_MS + POLL_INTERVAL_MS + 5000;
@@ -38,30 +34,23 @@ const BUFFER_RETENTION_MS = PLAYBACK_DELAY_MS + POLL_INTERVAL_MS + 5000;
 // How far back the fading trail reaches behind each vehicle.
 const TRAIL_LENGTH_MS = 8000;
 
-// How long a vehicle keeps showing the alert pulse after its data becomes
-// untrustworthy (a GPS-loss `gap`, or a dropped-poll freeze — see
-// `droppedLastBatch` below). Sized to the *drop* case's ~8.5s median hold
-// (empirically measured), not the shorter ~4.25s gap-hold — the reverse
-// would mean the ring routinely fades out before the more common drop case
-// ever resolves. Still short enough not to linger once reporting is normal.
+// Samples are 500ms apart at up to 14 m/s (~7m) — anything past this is a
+// simulated failure jump (GPS loss, dropped-poll bridge, etc.), which is
+// what the pulse flags.
+const TELEPORT_DISTANCE_M = 50;
+// Outlasts a dropped-poll freeze's ~8.5s median hold (measured), so the
+// ring doesn't fade before the freeze even resolves.
 const ANOMALY_PULSE_DURATION_MS = 9000;
-// Concurrent staggered rings (rather than one ring resetting) so the pulse
-// reads as a continuous radar sweep instead of a single blink-and-restart.
+// Staggered concurrent rings read as a continuous sweep, not one blinking ring.
 const PULSE_RING_PERIOD_MS = 1400;
 const PULSE_RING_COUNT = 3;
 const PULSE_MIN_RADIUS_PX = 9;
 const PULSE_MAX_RADIUS_PX = 26;
 
-// A real cartographic basemap (roads, native labels) instead of hand-drawn
-// line geometry — CARTO's free, keyless styles. This is a deliberate
-// exception to the site's "no external runtime calls" rule: the
-// vehicle/route simulation stays fully self-hosted, but a hand-rolled
-// GeoJsonLayer + deck.gl TextLayer will never match real map-tile cartography
-// (proper label placement, road styling, hinted typography), so the basemap
-// visuals are the one thing pulled from a live tile service. Dark Matter
-// (grayscale) read as flat/lifeless — there's no keyless colorful *dark*
-// style available (that tier needs a MapTiler/Stadia API key), so Voyager
-// (colorful, light) trades theme-matching for an actually vivid, alive map.
+// CARTO's free keyless tiles — the one deliberate exception to "no external
+// runtime calls" here, since hand-rolled geometry can't match real
+// cartography. Voyager (light) over Dark Matter: no keyless dark+colorful
+// tier exists, and vivid beats theme-matched-but-flat.
 const MAP_STYLE = 'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json';
 
 interface RenderVehicle {
@@ -76,6 +65,8 @@ interface Selected {
   meta: VehicleMeta;
   speedMps: number;
   heading: number;
+  idle: boolean;
+  signalLost: boolean;
 }
 
 interface TripDatum {
@@ -100,10 +91,31 @@ function hexToRgb(hex: string): [number, number, number] {
 
 export default function FleetMap() {
   const containerRef = useRef<HTMLDivElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
   const [stats, setStats] = useState({ total: 0, moving: 0, idle: 0 });
   const [mergeStats, setMergeStats] = useState({ gaps: 0, drops: 0, outliers: 0 });
   const [selected, setSelected] = useState<Selected | null>(null);
+  const [follow, setFollow] = useState(false);
   const [ready, setReady] = useState(false);
+
+  // Mirror `selected`/`follow` for the render loop and native event
+  // listeners below, which run outside React's render cycle and would
+  // otherwise only see stale state.
+  const selectedIdRef = useRef<string | null>(null);
+  const followRef = useRef(false);
+
+  const clearSelection = () => {
+    selectedIdRef.current = null;
+    followRef.current = false;
+    setSelected(null);
+    setFollow(false);
+  };
+
+  const toggleFollow = () => {
+    if (!selectedIdRef.current) return;
+    followRef.current = !followRef.current;
+    setFollow(followRef.current);
+  };
 
   useEffect(() => {
     const container = containerRef.current;
@@ -112,53 +124,63 @@ export default function FleetMap() {
     let cancelled = false;
     let animationFrame = 0;
     let pollTimer: ReturnType<typeof setInterval> | undefined;
+    let selectionRefreshTimer: ReturnType<typeof setInterval> | undefined;
     let worker: Worker | undefined;
 
     const map = new maplibregl.Map({
       container,
       style: MAP_STYLE,
-      // CARTO's style JSON doesn't embed attribution metadata on its source,
-      // so it has to be supplied explicitly rather than relying on MapLibre
-      // picking it up automatically.
+      // CARTO's style JSON has no attribution metadata, so it's supplied explicitly.
       attributionControl: { compact: true, customAttribution: '&copy; CARTO, &copy; OpenStreetMap contributors' },
     });
 
+    // `originalEvent` is only set for user-driven camera changes — our own
+    // jumpTo() calls below don't set it — so this only cancels follow on a
+    // real manual pan/zoom.
+    map.on('movestart', (e) => {
+      if (e.originalEvent && followRef.current) {
+        followRef.current = false;
+        setFollow(false);
+      }
+    });
+
+    // Closes on Escape or a click outside the popover/map; a click on the
+    // map itself is handled by the deck.gl overlay's onClick below, which
+    // knows whether it actually hit a vehicle.
+    function handleDocumentClick(e: MouseEvent) {
+      if (!selectedIdRef.current) return;
+      const target = e.target as Node;
+      if (popoverRef.current?.contains(target)) return;
+      if (container!.contains(target)) return;
+      clearSelection();
+    }
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') clearSelection();
+    }
+    document.addEventListener('click', handleDocumentClick);
+    window.addEventListener('keydown', handleKeyDown);
+
     map.on('load', () => {
-      // Fit bounds here rather than at construction time — the container's
-      // CSS aspect-ratio box may not have its final size yet when the map
-      // is constructed, which previously caused it to fit to a wrong
-      // guessed size (roads rendering as a small centered island instead
-      // of filling the view). The loading spinner covers the map until this
-      // fires, so nobody sees that wrong fit either.
+      // Fit on load, not construction — the container may not have its
+      // final size yet, which previously fit to a wrong guess. Spinner
+      // covers the map until this fires.
       map.fitBounds(SF_BOUNDS, { padding: 12, duration: 0 });
-      // Lock how far out you can zoom (to the initial fit) and how far you
-      // can pan, so there's no way to end up staring at blank space outside
-      // the road network — zooming in further is still unrestricted.
+      // Locks zoom-out and pan to the initial fit so you can't pan into
+      // blank space outside the road network; zooming in is unrestricted.
       map.setMinZoom(map.getZoom());
       map.setMaxBounds(SF_BOUNDS);
-      // The default view zooms in past that full-bbox fit — at 100 vehicles
-      // there's no density/blob problem left, but the fading trails (a few
-      // dozen meters long) and the occasional GPS-loss jump are still too
-      // small to read at the full-bbox scale. A modest bump keeps individual
-      // paths legible; zooming out to see the full spread (up to the minZoom
-      // lock above) is still available.
+      // Bumped in past the full-bbox fit so trails and GPS-loss jumps stay
+      // legible at 100 vehicles; zooming out to the full spread still works.
       map.setZoom(map.getZoom() + 1);
-      // Route-point density (sampled from sf-routes.json) peaks around the
-      // Union Square/Tenderloin border, not the bbox centroid — routes are
-      // drawn from the OSM node graph, and that area's tighter block grid
-      // has more nodes/intersections than SOMA's wide blocks, so more
-      // vehicles end up passing through this frame at any given time.
+      // Centered on the Union Square/Tenderloin border, not the bbox
+      // centroid — its tighter block grid carries more route traffic than
+      // SOMA's wide blocks.
       map.setCenter([-122.4095, 37.7815]);
 
-      // Static scenery — a handful of real SF landmarks, purely illustrative,
-      // giving the map a "somewhere with a purpose" feel. Added as native
-      // MapLibre source/layers rather than deck.gl's TextLayer: MapLibre's
-      // own labels (the ones that already look crisp) render through its
-      // real glyph-font pipeline, and deck.gl's separate SDF bitmap-font
-      // renderer will never quite match that — using the same pipeline the
-      // basemap's own labels use is what actually produces matching quality,
-      // not more fontSettings tuning. text-font/colors below are copied from
-      // Voyager's own place-label layers (style.json) for consistency.
+      // Illustrative SF landmarks, added as native MapLibre layers rather
+      // than deck.gl's TextLayer so labels render through the same glyph
+      // pipeline as the basemap's own labels (deck.gl's SDF text won't
+      // match). text-font/colors copied from Voyager's place-label layers.
       map.addSource('pois', {
         type: 'geojson',
         data: {
@@ -204,20 +226,27 @@ export default function FleetMap() {
       setReady(true);
     });
 
-    // MapboxOverlay's types target mapbox-gl's IControl; MapLibre implements
-    // the same control interface, so this cast is the documented way to use
-    // deck.gl's MapLibre integration.
+    // MapboxOverlay targets mapbox-gl's IControl type; MapLibre implements
+    // the same interface, so this cast is deck.gl's documented MapLibre usage.
     const overlay = new MapboxOverlay({
       interleaved: true,
       layers: [],
       getCursor: ({ isDragging, isHovering }) => (isDragging ? 'grabbing' : isHovering ? 'pointer' : 'grab'),
+      // Icons render at 15-20px, too small a target for pixel-exact default
+      // picking — pads the hit-test area by 20px regardless of icon size.
+      pickingRadius: 20,
+      // The IconLayer's own onClick (below) handles picks; this only sees
+      // `picked: false` — the map background, including POI dots since
+      // those aren't a deck.gl layer — and treats that as "dismiss".
+      onClick: (info) => {
+        if (!info.picked) clearSelection();
+      },
     });
     map.addControl(overlay as unknown as maplibregl.IControl);
 
     async function setup() {
-      // Fetching + parsing the ~4MB route file and building 5,000 vehicles
-      // (fleet.worker.ts) runs off the main thread — this was blocking work
-      // happening right as the demo mounted, competing with page scroll/UI.
+      // Parsing the ~4MB route file and building the fleet (fleet.worker.ts)
+      // runs off the main thread so it doesn't block page scroll/UI on mount.
       worker = new Worker(new URL('./fleet/fleet.worker.ts', import.meta.url), { type: 'module' });
 
       const { fleet, metadata } = await new Promise<{
@@ -237,29 +266,13 @@ export default function FleetMap() {
       if (cancelled) return;
 
       const buffers = new Map<string, TrackPoint[]>();
-      // Vehicle id -> the playback-clock time (a TrackPoint `t`, same clock
-      // `renderTime` advances on) its most recent gap event started freezing
-      // it at — drives the alert pulse's on/fade-out window.
+      // Vehicle id -> playback-clock time of the point right before a
+      // teleport-sized jump; drives the pulse's on/fade-out window (see the
+      // distance check in applyBatch below).
       const anomalies = new Map<string, number>();
-      // Vehicle id -> whether *last* poll's batch for it produced a gap event.
-      // poller.ts's GPS-loss offset is corrected on the following poll, which
-      // merge.ts also sees as an implausible-speed jump and flags `gap` —
-      // that correction is real (see poller.ts's own comment on it) but its
-      // hold is a single sample interval (~250ms, imperceptible), unlike the
-      // original glitch's multi-second freeze. Pulsing on it too just looks
-      // like the ring fired for no reason, since there's no visible stop to
-      // anchor it to — so it's excluded from anomalies below.
-      const glitchedLastBatch = new Map<string, boolean>();
-      // Vehicle id -> whether its *last* poll came back empty (DROP_CHANCE —
-      // a missed packet, merge.ts's `empty` event). While a vehicle is in
-      // this state, interpolateAt has nothing newer to interpolate toward,
-      // so it holds at its last point for up to a full poll interval; once
-      // data resumes, playback bridges the gap with a straight line to
-      // wherever the vehicle actually got to, not the road it actually took.
-      // That reads as the same kind of "this position is a guess, not real
-      // telemetry" moment as a GPS-loss `gap` (often with a longer hold), but
-      // merge.ts never flags it, so without this it never triggers a pulse.
-      const droppedLastBatch = new Map<string, boolean>();
+      // Updated every frame so click/refresh handlers can check signal
+      // status "now", on the same clock buildPulseLayer uses.
+      let latestRenderTime = -PLAYBACK_DELAY_MS;
 
       const renderVehicles: RenderVehicle[] = fleet.map((v) => ({
         id: v.id,
@@ -268,9 +281,31 @@ export default function FleetMap() {
         heading: v.points[0].heading,
         idle: v.idle,
       }));
-      // renderVehicles' objects are mutated in place each frame (see below),
-      // never replaced, so this lookup stays valid without rebuilding.
+      // renderVehicles objects are mutated in place, never replaced, so this
+      // lookup stays valid without rebuilding.
       const renderVehicleById = new Map(renderVehicles.map((rv) => [rv.id, rv]));
+
+      // Reused by both click and the throttled refresh below — reading live
+      // from `renderVehicleById` is what makes the refresh actually live.
+      function computeSelected(id: string): Selected | null {
+        const vehicle = fleet.find((v) => v.id === id);
+        const meta = metadata.get(id);
+        const rv = renderVehicleById.get(id);
+        if (!vehicle || !meta || !rv) return null;
+        const since = anomalies.get(id);
+        const age = since !== undefined ? latestRenderTime - since : Infinity;
+        const signalLost = age >= 0 && age <= ANOMALY_PULSE_DURATION_MS;
+        return { meta, speedMps: vehicle.speedMps, heading: rv.heading, idle: rv.idle, signalLost };
+      }
+
+      function selectVehicle(id: string) {
+        selectedIdRef.current = id;
+        // Starts unfollowed — otherwise clicking a second vehicle while
+        // following the first yanks the camera with no warning.
+        followRef.current = false;
+        setFollow(false);
+        setSelected(computeSelected(id));
+      }
 
       const movingCount = fleet.filter((v) => !v.idle).length;
       setStats({ total: fleet.length, moving: movingCount, idle: fleet.length - movingCount });
@@ -283,12 +318,15 @@ export default function FleetMap() {
       const accentRgb = hexToRgb(accentHex);
       const mutedRgb = hexToRgb(mutedHex);
       const warnRgb = hexToRgb(warnHex);
+      // Fixed, not sourced from the site's CSS vars — those are tuned for
+      // the dark site theme, but this ring sits on the Voyager basemap's
+      // light map surface, so it needs to contrast against that instead.
+      // Not accent/warn either, so it never reads as a vehicle-state color.
+      const selectionRgb: [number, number, number] = [37, 99, 235];
 
       let frameTick = 0;
 
-      // A soft glow halo behind each icon, plus a larger icon size, keeps the
-      // vehicles — the actual point of the demo — as the clear focal point
-      // regardless of whatever colorful detail the basemap renders underneath.
+      // Glow halo keeps vehicles the clear focal point over the colorful basemap.
       function buildVehicleGlowLayer() {
         return new ScatterplotLayer<RenderVehicle>({
           id: 'vehicle-glow',
@@ -303,11 +341,8 @@ export default function FleetMap() {
         });
       }
 
-      // Expanding, fading rings around any vehicle with a recent gap event —
-      // the visual flag for "this one's reporting bad/malformed data and may
-      // be off its true course". Several staggered rings per vehicle run
-      // concurrently so it reads as a continuous pulse rather than a single
-      // one-shot blink.
+      // Fading rings flag a vehicle with a recent gap event as possibly off
+      // its true course. Staggered concurrent rings read as a continuous pulse.
       function buildPulseLayer(renderTime: number) {
         const data: PulseRingDatum[] = [];
         for (const [id, since] of anomalies) {
@@ -348,20 +383,57 @@ export default function FleetMap() {
         });
       }
 
-      // Fed from the same per-vehicle position buffers used for playback
-      // interpolation — no separate trail-tracking needed. Rebuilt only when
-      // a buffer actually changes (each poll), not every frame; TripsLayer
-      // handles the fade purely by moving `currentTime` forward each frame
-      // against the same path/timestamps data, which is the cheap part.
+      // Static ring around the selected vehicle, distinct from the animated
+      // warn-colored anomaly pulse above. A white halo behind the blue ring
+      // keeps it visible over the basemap's light-blue water areas too.
+      function buildSelectionLayer() {
+        const rv = selectedIdRef.current ? renderVehicleById.get(selectedIdRef.current) : undefined;
+        if (!rv) return null;
+        return [
+          new ScatterplotLayer<RenderVehicle>({
+            id: 'vehicle-selection-halo',
+            data: [rv],
+            getPosition: (d) => [d.lng, d.lat],
+            getRadius: 17,
+            radiusUnits: 'pixels',
+            filled: false,
+            stroked: true,
+            getLineColor: [255, 255, 255, 220],
+            getLineWidth: 4,
+            lineWidthUnits: 'pixels',
+            updateTriggers: {
+              getPosition: frameTick,
+            },
+          }),
+          new ScatterplotLayer<RenderVehicle>({
+            id: 'vehicle-selection',
+            data: [rv],
+            getPosition: (d) => [d.lng, d.lat],
+            getRadius: 15,
+            radiusUnits: 'pixels',
+            filled: false,
+            stroked: true,
+            getLineColor: () => [...selectionRgb, 255],
+            getLineWidth: 2,
+            lineWidthUnits: 'pixels',
+            updateTriggers: {
+              getPosition: frameTick,
+            },
+          }),
+        ];
+      }
+
+      // Fed from the same buffers used for playback interpolation. Rebuilt
+      // only on each poll, not every frame — TripsLayer handles the fade
+      // cheaply by advancing `currentTime` against the same data.
       let tripsData: TripDatum[] = [];
 
       function rebuildTripsData() {
         tripsData = renderVehicles.flatMap((rv) => {
           const buffer = buffers.get(rv.id) ?? [];
 
-          // Split on `gap` boundaries — a GPS-loss jump is a real
-          // discontinuity, so the trail must break there rather than
-          // TripsLayer drawing a fake straight line across it.
+          // Split on `gap` boundaries so the trail breaks at a real
+          // GPS-loss jump instead of drawing a straight line across it.
           const segments: TrackPoint[][] = [];
           let current: TrackPoint[] = [];
           for (const p of buffer) {
@@ -408,9 +480,8 @@ export default function FleetMap() {
           iconMapping: atlas.mapping,
           getIcon: (d) => (d.idle ? 'idle' : 'moving'),
           getPosition: (d) => [d.lng, d.lat],
-          // heading is a compass bearing (clockwise from north); deck.gl
-          // rotates IconLayer icons counterclockwise for positive angles, so
-          // it has to be negated to point the icon the right way.
+          // heading is clockwise-from-north; deck.gl rotates icons
+          // counterclockwise, so it's negated here.
           getAngle: (d) => -d.heading,
           getSize: 15,
           sizeUnits: 'pixels',
@@ -419,11 +490,7 @@ export default function FleetMap() {
           pickable: true,
           onClick: (info) => {
             if (!info.object) return;
-            const vehicle = fleet.find((v) => v.id === info.object!.id);
-            const meta = metadata.get(info.object.id);
-            if (vehicle && meta) {
-              setSelected({ meta, speedMps: vehicle.speedMps, heading: info.object.heading });
-            }
+            selectVehicle(info.object.id);
           },
           updateTriggers: {
             getPosition: frameTick,
@@ -437,6 +504,7 @@ export default function FleetMap() {
           buildTrailLayer(-PLAYBACK_DELAY_MS),
           buildVehicleGlowLayer(),
           buildPulseLayer(-PLAYBACK_DELAY_MS),
+          buildSelectionLayer(),
           buildVehicleLayer(),
         ],
       });
@@ -448,38 +516,27 @@ export default function FleetMap() {
         outlier: 'outliers',
       };
 
-      // `trackStats` is false only for the startup seed batch below — it
-      // runs through the same random-failure logic as a real poll (so the
-      // seeded buffer/pulses look plausible), but it represents invisible
-      // pre-mount history, not anything the viewer actually watched happen.
-      // Counting it would make the stat cards start at some nonzero number
-      // the instant the page loads, with no visible poll or map activity to
-      // explain it.
+      // `trackStats` is false only for the startup seed batch — it uses the
+      // same failure logic for plausibility, but represents invisible
+      // pre-mount history, so counting it would start the stat cards at a
+      // nonzero number with no visible activity to explain it.
       function applyBatch(batch: Map<string, TrackPoint[]>, cursorT: number, trackStats: boolean) {
         for (const [id, incoming] of batch) {
           const previous = buffers.get(id) ?? [];
           const { buffer: merged, events } = mergeTrackingPath(previous, incoming);
           buffers.set(id, trimBuffer(merged, cursorT, BUFFER_RETENTION_MS));
 
-          const isFreshGap = events.includes('gap') && !glitchedLastBatch.get(id);
-          const isDropRecovery = droppedLastBatch.get(id) === true && !events.includes('empty');
-          if ((isFreshGap || isDropRecovery) && previous.length > 0) {
-            // Anchor the pulse to the *last known-good* point (`previous`'s
-            // tail), not the point where the discontinuity is finally
-            // resolved — interpolateAt (playback.ts) holds the vehicle right
-            // there the instant it can't trust what comes next, so this is
-            // when the vehicle actually freezes on screen. Keying off this
-            // timestamp (rather than `cursorT`, when merge detected it
-            // server-side ~PLAYBACK_DELAY_MS early, or the resolving point,
-            // which only fires once playback catches up) makes the ring
-            // appear right as the freeze starts, stay lit through the
-            // resolution, and fade out shortly after — spanning the whole
-            // "this vehicle's data is bad" window instead of only flashing
-            // at the tail end of it.
-            anomalies.set(id, previous[previous.length - 1].t);
+          // Scans only the newly-appended range — older pairs were already
+          // checked when they first appeared.
+          for (let i = Math.max(previous.length - 1, 0); i < merged.length - 1; i++) {
+            if (haversineMeters(merged[i], merged[i + 1]) > TELEPORT_DISTANCE_M) {
+              // Anchored to the point *before* the jump — interpolateAt
+              // holds the vehicle there until playback catches up, so
+              // that's when the freeze actually starts on screen (using
+              // `cursorT` instead would be ~PLAYBACK_DELAY_MS early).
+              anomalies.set(id, merged[i].t);
+            }
           }
-          glitchedLastBatch.set(id, events.includes('gap'));
-          droppedLastBatch.set(id, events.includes('empty'));
           if (trackStats) {
             for (const event of events) {
               const key = tallyEvent[event];
@@ -491,10 +548,8 @@ export default function FleetMap() {
         if (trackStats) setMergeStats({ ...eventTotals });
       }
 
-      // Seed each vehicle's buffer with a window ending at t=0 (using
-      // negative timestamps — a valid position on a looping route) so
-      // playback has real data to interpolate through from frame one,
-      // instead of freezing for the first PLAYBACK_DELAY_MS.
+      // Seeds each buffer with a window ending at t=0 (negative timestamps
+      // are valid on a looping route) so playback has data from frame one.
       applyBatch(pollFleet(fleet, -PLAYBACK_DELAY_MS, 0), 0, false);
 
       const startTime = performance.now();
@@ -508,9 +563,17 @@ export default function FleetMap() {
 
       pollTimer = setInterval(poll, POLL_INTERVAL_MS);
 
+      // Keeps the popover's heading/status fields live while the vehicle
+      // moves, without re-rendering React on every animation frame.
+      selectionRefreshTimer = setInterval(() => {
+        const id = selectedIdRef.current;
+        if (id) setSelected(computeSelected(id));
+      }, 300);
+
       function frame() {
         const realNowT = performance.now() - startTime;
         const renderTime = realNowT - PLAYBACK_DELAY_MS;
+        latestRenderTime = renderTime;
 
         for (const rv of renderVehicles) {
           const buffer = buffers.get(rv.id);
@@ -522,12 +585,20 @@ export default function FleetMap() {
           }
         }
 
+        if (followRef.current && selectedIdRef.current) {
+          const rv = renderVehicleById.get(selectedIdRef.current);
+          // jumpTo, not easeTo — position is already smoothly interpolated
+          // above, so an eased camera would add a second competing curve.
+          if (rv) map.jumpTo({ center: [rv.lng, rv.lat] });
+        }
+
         frameTick++;
         overlay.setProps({
           layers: [
             buildTrailLayer(renderTime),
             buildVehicleGlowLayer(),
             buildPulseLayer(renderTime),
+            buildSelectionLayer(),
             buildVehicleLayer(),
           ],
         });
@@ -543,6 +614,9 @@ export default function FleetMap() {
       cancelled = true;
       worker?.terminate();
       if (pollTimer) clearInterval(pollTimer);
+      if (selectionRefreshTimer) clearInterval(selectionRefreshTimer);
+      document.removeEventListener('click', handleDocumentClick);
+      window.removeEventListener('keydown', handleKeyDown);
       cancelAnimationFrame(animationFrame);
       map.remove();
     };
@@ -586,21 +660,39 @@ export default function FleetMap() {
         </div>
 
         {selected && (
-          <div className="fleet-popover">
-            <p className="fleet-popover-title">{selected.meta.id}</p>
-            <p className="fleet-popover-job">{selected.meta.job}</p>
+          <div className="fleet-popover" ref={popoverRef}>
+            <div className="fleet-popover-header">
+              <p className="fleet-popover-title">{selected.meta.id}</p>
+              <button type="button" className="fleet-popover-close" onClick={clearSelection} aria-label="Close">
+                &times;
+              </button>
+            </div>
+            <p className={`fleet-popover-status${selected.signalLost ? ' fleet-popover-status-alert' : ''}`}>
+              {selected.signalLost ? 'Signal lost — relocating' : selected.idle ? 'Idle' : 'Moving'}
+            </p>
             <p>
               <span>Plate</span>
               <span>{selected.meta.plate}</span>
             </p>
             <p>
+              <span>Model</span>
+              <span>{selected.meta.model}</span>
+            </p>
+            <p>
               <span>Speed</span>
-              <span>{Math.round(selected.speedMps * 2.237)} mph</span>
+              <span>{Math.round(selected.speedMps * 3.6)} km/h</span>
             </p>
             <p>
               <span>Heading</span>
               <span>{Math.round(selected.heading)}&deg;</span>
             </p>
+            <button
+              type="button"
+              className={`fleet-popover-follow${follow ? ' fleet-popover-follow-active' : ''}`}
+              onClick={toggleFollow}
+            >
+              {follow ? 'Following' : 'Follow'}
+            </button>
           </div>
         )}
       </div>

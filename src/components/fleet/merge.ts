@@ -8,22 +8,17 @@ export interface MergeResult {
   events: MergeEvent[];
 }
 
-// A point-to-point implied speed above this is never genuine driving (the
-// fleet's fastest vehicle tops out at 14 m/s, see MAX_SPEED_MPS in
-// simulate.ts) — it's either a transient bad ping or a real GPS-loss
-// discontinuity. Which one it is gets decided by looking at what follows.
+// Above this implied speed, it's never genuine driving (top speed is 14
+// m/s, see MAX_SPEED_MPS in simulate.ts) — either a bad ping or a real
+// GPS-loss jump, decided by looking at what follows.
 const MAX_PLAUSIBLE_MPS = 16;
 
-// Stitches an incoming trackingPath chunk onto a vehicle's buffer, coping
-// with everything a real tracking feed does to a naive stitcher:
-//   - an empty/null poll (network hiccup) — buffer holds, nothing to append.
-//   - re-sent tail/overlap (see poller.ts's OVERLAP_MS) — deduped by `t`,
-//     never rewriting already-consumed history.
-//   - a lone bad ping (multipath near buildings) — implausible speed in,
-//     implausible speed back out; rejected rather than stitched in.
-//   - a sustained relocation (GPS reacquired post-tunnel/bridge somewhere
-//     else) — implausible speed in, but it *stays* there; accepted as a real
-//     jump (`gap: true`) so playback snaps instead of gliding through it.
+// Stitches an incoming trackingPath chunk onto a vehicle's buffer:
+//   - empty poll — buffer holds, nothing appended.
+//   - re-sent tail/overlap (poller.ts's OVERLAP_MS) — deduped by `t`.
+//   - a lone bad ping — implausible speed in and back out; rejected.
+//   - a sustained relocation — implausible speed in, but it stays there;
+//     accepted as a real jump (`gap: true`) so playback snaps, not glides.
 export function mergeTrackingPath(buffer: TrackPoint[], incoming: TrackPoint[]): MergeResult {
   if (incoming.length === 0) return { buffer, events: ['empty'] };
 
@@ -52,11 +47,9 @@ export function mergeTrackingPath(buffer: TrackPoint[], incoming: TrackPoint[]):
 
     if (impliedSpeed > MAX_PLAUSIBLE_MPS) {
       const next = newPoints[i + 1];
-      // A lone spike snaps back near `prev`'s own trajectory once the next
-      // ping arrives; a real relocation keeps going from where it landed.
-      // With no next point yet to check, don't speculatively discard the
-      // newest data — accept it as a jump; a future point would contradict
-      // it if it were actually a spike.
+      // A lone spike snaps back near `prev`'s trajectory on the next ping;
+      // a real relocation keeps going. With no next point yet, accept it
+      // as a jump rather than speculatively discard it.
       const isLoneSpike = next !== undefined && haversineMeters(next, prev) < dist * 0.5;
 
       if (isLoneSpike) {
@@ -78,9 +71,8 @@ export function mergeTrackingPath(buffer: TrackPoint[], incoming: TrackPoint[]):
   return { buffer: result, events };
 }
 
-// Bounds memory by dropping points well behind the current playback cursor,
-// keeping one point before the cutoff so interpolation across the trim point
-// stays continuous.
+// Drops points well behind the playback cursor, keeping one before the
+// cutoff so interpolation across the trim point stays continuous.
 export function trimBuffer(buffer: TrackPoint[], cursorT: number, keepMs: number): TrackPoint[] {
   const cutoff = cursorT - keepMs;
   const idx = buffer.findIndex((p) => p.t >= cutoff);

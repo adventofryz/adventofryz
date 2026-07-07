@@ -135,19 +135,14 @@
 
 .fleet-dot-anomaly {
   background: var(--warn);
-  /* Two faint expanding rings around the center dot, standing in for the
-     map's animated concentric pulse (a static icon can't loop the real
-     expand-and-fade animation, so this reads as "rings", not motion). */
+  /* Static stand-in for the map's animated pulse rings. */
   box-shadow:
     0 0 0 2px rgba(245, 158, 11, 0.35),
     0 0 0 4px rgba(245, 158, 11, 0.15);
 }
 
-/* MapLibre's own attribution control (compact mode) replaces the manual
-   attribution div now that the basemap is real CARTO tiles instead of a
-   hand-drawn roads layer — style it to fit the dark theme. This file is a
-   plain global stylesheet (not CSS modules), so no :global() wrapper needed
-   to reach maplibre's own DOM classes. */
+/* Styles MapLibre's own attribution control to fit the dark theme. Plain
+   global stylesheet, so no :global() wrapper is needed for its classes. */
 .fleet-map .maplibregl-ctrl-attrib {
   background: rgba(18, 24, 34, 0.75);
   color: var(--text-muted);
@@ -171,16 +166,44 @@
   min-width: 9rem;
 }
 
-.fleet-popover-title {
+.fleet-popover-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
   margin: 0 0 0.35rem;
+}
+
+.fleet-popover-title {
+  margin: 0;
   font-family: var(--font-mono);
   color: var(--text);
   font-weight: 600;
 }
 
-.fleet-popover-job {
+.fleet-popover-close {
+  appearance: none;
+  border: none;
+  background: none;
+  padding: 0;
+  margin: -0.15rem -0.1rem 0 0;
+  font-size: 1rem;
+  line-height: 1;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.fleet-popover-close:hover {
+  color: var(--text);
+}
+
+.fleet-popover-status {
   margin: 0 0 0.5rem;
   color: var(--accent);
+}
+
+.fleet-popover-status-alert {
+  color: var(--warn);
 }
 
 .fleet-popover p {
@@ -194,4 +217,31 @@
 .fleet-popover p span:last-child {
   font-family: var(--font-mono);
   color: var(--text);
+}
+
+.fleet-popover-follow {
+  appearance: none;
+  width: 100%;
+  margin-top: 0.5rem;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+}
+
+.fleet-popover-follow:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+
+.fleet-popover-follow-active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
 }

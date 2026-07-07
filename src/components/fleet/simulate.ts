@@ -31,10 +31,9 @@ export function createFleet(routes: RoutePoint[][], targetCount: number): FleetV
   let id = 0;
 
   outer: for (const route of routes) {
-    // Cumulative distance only needs computing once per base route: a clone's
-    // jitter offset is a uniform few-meter translation of every point, which
-    // leaves segment-to-segment distances unchanged. Recomputing it per clone
-    // was ~17x redundant haversine work and the main cause of a slow first load.
+    // Computed once per base route, not per clone — jitter is a uniform
+    // translation that leaves segment distances unchanged, so recomputing
+    // per clone was ~17x redundant work (and the main cause of slow load).
     const baseCumulative = buildCumulative(route);
     const totalDistance = baseCumulative[baseCumulative.length - 1] || 1;
 
@@ -64,21 +63,17 @@ export function createFleet(routes: RoutePoint[][], targetCount: number): FleetV
   return fleet;
 }
 
-// Position + heading of a vehicle at a given distance travelled along its
-// route. A route's start and end are usually nowhere near each other (just
-// two random points joined by a shortest path), so simply wrapping back to
-// the start at the end would be a teleport. Instead this reflects — the
-// vehicle U-turns and drives back along the same route (ping-pong) — which
-// is continuous in position, only the heading flips at each turnaround.
-// `direction` is which way it's headed initially.
+// Position + heading at a given distance along the route. Wrapping back to
+// the start would teleport (start/end aren't near each other), so this
+// reflects instead — a continuous ping-pong U-turn, heading flips at each
+// turnaround. `direction` is the initial heading.
 export function positionAtDistance(vehicle: FleetVehicle, distanceMeters: number): RoutePoint {
   const { points, cumulative, totalDistance, direction } = vehicle;
   const period = totalDistance * 2;
-  // `distanceMeters` always increases with time — `direction` only shifts
-  // where in the ping-pong cycle it starts (a half-period phase offset), it
-  // must not flip the sign of an ever-growing value fed into the modulo
-  // below (that produced a vehicle whose position kept moving forward while
-  // its computed heading said "reversed").
+  // `direction` only phase-shifts where the ping-pong cycle starts — it
+  // must not flip the sign of the ever-growing `distanceMeters` fed into
+  // the modulo below (that bug moved the vehicle forward while its heading
+  // said "reversed").
   const offset = direction === 1 ? 0 : totalDistance;
   const m = ((distanceMeters + offset) % period + period) % period;
   const goingForward = m <= totalDistance;

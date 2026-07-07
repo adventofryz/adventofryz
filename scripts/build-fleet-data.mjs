@@ -1,19 +1,14 @@
-// One-time data prep for the fleet-tracking demo. Fetches the real SF street
-// network from OpenStreetMap (Overpass API) — used only to compute the
-// routing graph vehicles drive on — and generates simulated vehicle routes
-// along it. Output is committed to the repo; the running site never calls
-// Overpass. The visual basemap (roads, labels) is a separate live CARTO tile
-// service, a deliberate exception to that rule — see PLAN.md.
+// One-time data prep: fetches SF's street network from OpenStreetMap
+// (Overpass API) and generates vehicle routes along it. Output is
+// committed; the running site never calls Overpass (the basemap tiles are
+// a separate, deliberate exception — see PLAN.md).
 
 import { writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 
-// south, west, north, east — SF downtown core, widened ~1.5x linear (~2.25x
-// area) from the original tight Union Square/FiDi/SOMA/Civic Center box so
-// 5,000 vehicles have room to actually spread out instead of piling onto the
-// same small cluster of routes. Still centered on the same dense grid and
-// sized to match the map container's aspect ratio (680:420) so fitBounds
-// fills it edge to edge with no letterboxing.
+// south, west, north, east — SF downtown core, widened ~1.5x linear so
+// 5,000 vehicles have room to spread out. Sized to match the map
+// container's 680:420 aspect ratio so fitBounds fills edge to edge.
 const BBOX = [37.768, -122.439, 37.798, -122.377];
 const HIGHWAY_TYPES = ['motorway', 'trunk', 'primary', 'secondary', 'tertiary'];
 const OVERPASS_ENDPOINTS = [
@@ -21,8 +16,7 @@ const OVERPASS_ENDPOINTS = [
   'https://overpass.kumi.systems/api/interpreter',
   'https://overpass.openstreetmap.ru/api/interpreter',
 ];
-// Scaled up from 300 alongside the bbox so route density per unit area (and
-// therefore how spread-out cloned vehicles look) stays about the same.
+// Scaled up alongside the bbox to keep route density per unit area the same.
 const ROUTE_COUNT = 700;
 const MIN_ROUTE_POINTS = 8;
 const OUT_DIR = path.join(process.cwd(), 'public', 'data');
