@@ -75,6 +75,14 @@
   .fleet-stat-tooltip {
     max-width: min(13rem, 70vw);
   }
+
+  /* Taller than the desktop 680:420 ratio, which letterboxes to a short
+     strip at phone width. --sidebar-w shrinks too, taking the handle's
+     open-state offset with it since both read the same var. */
+  .fleet-map-wrap {
+    aspect-ratio: 3 / 4;
+    --sidebar-w: min(190px, 68vw);
+  }
 }
 
 .fleet-stat-has-hint {
@@ -152,6 +160,7 @@
   aspect-ratio: 680 / 420;
   background-color: var(--bg);
   overflow: hidden;
+  --sidebar-w: 240px;
 }
 
 /* The fixed 680:420 ratio is right for the card layout, but would

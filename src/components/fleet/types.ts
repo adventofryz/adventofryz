@@ -21,3 +21,12 @@ export interface VehicleMeta {
   plate: string;
   model: string;
 }
+
+export type VehicleStatus = 'moving' | 'idle' | 'signal-lost';
+
+// A named group of vehicle ids, for the fleet roster sidebar.
+export interface Fleet {
+  id: string;
+  name: string;
+  vehicleIds: string[];
+}

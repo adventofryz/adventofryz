@@ -9,8 +9,10 @@ import { pollFleet } from './fleet/poller';
 import { mergeTrackingPath, trimBuffer, type MergeEvent } from './fleet/merge';
 import { interpolateAt } from './fleet/playback';
 import { buildVehicleIconAtlas } from './fleet/icons';
+import { buildFleets } from './fleet/fleets';
 import { POIS } from './fleet/pois';
-import type { TrackPoint, VehicleMeta } from './fleet/types';
+import type { Fleet, TrackPoint, VehicleMeta, VehicleStatus } from './fleet/types';
+import FleetSidebar from './FleetSidebar';
 import './FleetMap.css';
 
 // [[west, south], [east, north]] — matches the bbox build-fleet-data.mjs used.
@@ -88,18 +90,30 @@ export default function FleetMap() {
   const containerRef = useRef<HTMLDivElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
+  const sidebarRootRef = useRef<HTMLDivElement>(null);
   const [stats, setStats] = useState({ total: 0, moving: 0, idle: 0 });
   const [mergeStats, setMergeStats] = useState({ gaps: 0, drops: 0, outliers: 0 });
   const [selected, setSelected] = useState<Selected | null>(null);
   const [follow, setFollow] = useState(false);
   const [ready, setReady] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [fleets, setFleets] = useState<Fleet[]>([]);
+  const [vehicleStatus, setVehicleStatus] = useState<Record<string, VehicleStatus>>({});
 
   // Mirror `selected`/`follow` for the render loop and native event
   // listeners below, which run outside React's render cycle and would
   // otherwise only see stale state.
   const selectedIdRef = useRef<string | null>(null);
   const followRef = useRef(false);
+  // Set inside setup(); lets the sidebar call selectVehicle without a
+  // second copy of its logic.
+  const selectVehicleRef = useRef<(id: string) => void>(() => {});
+  // Read by statusRefreshTimer below — recomputing status for ~100
+  // vehicles every second is wasted work while the roster is closed and
+  // invisible, and was competing with click handling on the main thread.
+  const sidebarOpenRef = useRef(false);
+  const refreshVehicleStatusRef = useRef<() => void>(() => {});
 
   const clearSelection = () => {
     selectedIdRef.current = null;
@@ -130,6 +144,7 @@ export default function FleetMap() {
     let animationFrame = 0;
     let pollTimer: ReturnType<typeof setInterval> | undefined;
     let selectionRefreshTimer: ReturnType<typeof setInterval> | undefined;
+    let statusRefreshTimer: ReturnType<typeof setInterval> | undefined;
     let worker: Worker | undefined;
 
     const map = new maplibregl.Map({
@@ -167,6 +182,7 @@ export default function FleetMap() {
       if (!selectedIdRef.current) return;
       const target = e.target as Node;
       if (popoverRef.current?.contains(target)) return;
+      if (sidebarRootRef.current?.contains(target)) return;
       if (container!.contains(target)) return;
       clearSelection();
     }
@@ -321,10 +337,24 @@ export default function FleetMap() {
         followRef.current = false;
         setFollow(false);
         setSelected(computeSelected(id));
+        // Popover and sidebar both anchor to the left edge — closing the
+        // sidebar on any selection keeps them from ever overlapping.
+        sidebarOpenRef.current = false;
+        setSidebarOpen(false);
       }
+
+      // Also pans there, since a sidebar click (unlike a map click) has no
+      // on-screen position to imply one; easeTo sets no `originalEvent`,
+      // so it won't trip the follow-cancel guard above.
+      selectVehicleRef.current = (id: string) => {
+        selectVehicle(id);
+        const rv = renderVehicleById.get(id);
+        if (rv) map.easeTo({ center: [rv.lng, rv.lat], duration: 600 });
+      };
 
       const movingCount = fleet.filter((v) => !v.idle).length;
       setStats({ total: fleet.length, moving: movingCount, idle: fleet.length - movingCount });
+      setFleets(buildFleets(fleet.map((v) => v.id)));
 
       const rootStyle = getComputedStyle(document.documentElement);
       const accentHex = rootStyle.getPropertyValue('--accent').trim() || '#2dd4bf';
@@ -590,6 +620,22 @@ export default function FleetMap() {
         if (id) setSelected(computeSelected(id));
       }, 300);
 
+      // Drives the sidebar's status dots — coarser than the selection
+      // refresh above since the roster doesn't need render-loop precision.
+      function refreshVehicleStatus() {
+        const next: Record<string, VehicleStatus> = {};
+        for (const rv of renderVehicles) {
+          const since = anomalies.get(rv.id);
+          const age = since !== undefined ? latestRenderTime - since : Infinity;
+          next[rv.id] = age >= 0 && age <= ANOMALY_PULSE_DURATION_MS ? 'signal-lost' : rv.idle ? 'idle' : 'moving';
+        }
+        setVehicleStatus(next);
+      }
+      refreshVehicleStatusRef.current = refreshVehicleStatus;
+      statusRefreshTimer = setInterval(() => {
+        if (sidebarOpenRef.current) refreshVehicleStatus();
+      }, 1000);
+
       function frame() {
         const realNowT = performance.now() - startTime;
         const renderTime = realNowT - PLAYBACK_DELAY_MS;
@@ -635,6 +681,7 @@ export default function FleetMap() {
       worker?.terminate();
       if (pollTimer) clearInterval(pollTimer);
       if (selectionRefreshTimer) clearInterval(selectionRefreshTimer);
+      if (statusRefreshTimer) clearInterval(statusRefreshTimer);
       document.removeEventListener('click', handleDocumentClick);
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
       window.removeEventListener('keydown', handleKeyDown);
@@ -671,6 +718,25 @@ export default function FleetMap() {
 
       <div className="fleet-map-wrap" ref={wrapRef}>
         <div ref={containerRef} className="fleet-map" />
+
+        {/* Excluded from handleDocumentClick's outside-click check below,
+            or selecting a vehicle here would immediately clear itself. */}
+        <div ref={sidebarRootRef}>
+          <FleetSidebar
+            fleets={fleets}
+            statusById={vehicleStatus}
+            selectedId={selected?.meta.id ?? null}
+            open={sidebarOpen}
+            onToggle={() => {
+              const next = !sidebarOpen;
+              sidebarOpenRef.current = next;
+              setSidebarOpen(next);
+              // Otherwise the dots would show up to a second-old data on open.
+              if (next) refreshVehicleStatusRef.current();
+            }}
+            onSelectVehicle={(id) => selectVehicleRef.current(id)}
+          />
+        </div>
 
         {!ready && (
           <div className="fleet-map-loading">
