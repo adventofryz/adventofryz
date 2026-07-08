@@ -86,12 +86,14 @@ function hexToRgb(hex: string): [number, number, number] {
 
 export default function FleetMap() {
   const containerRef = useRef<HTMLDivElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
   const [stats, setStats] = useState({ total: 0, moving: 0, idle: 0 });
   const [mergeStats, setMergeStats] = useState({ gaps: 0, drops: 0, outliers: 0 });
   const [selected, setSelected] = useState<Selected | null>(null);
   const [follow, setFollow] = useState(false);
   const [ready, setReady] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   // Mirror `selected`/`follow` for the render loop and native event
   // listeners below, which run outside React's render cycle and would
@@ -112,6 +114,14 @@ export default function FleetMap() {
     setFollow(followRef.current);
   };
 
+  const toggleFullscreen = () => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+    } else {
+      wrapRef.current?.requestFullscreen();
+    }
+  };
+
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -128,6 +138,17 @@ export default function FleetMap() {
       // CARTO's style JSON has no attribution metadata, so it's supplied explicitly.
       attributionControl: { compact: true, customAttribution: '&copy; CARTO, &copy; OpenStreetMap contributors' },
     });
+
+    // A custom button (below) drives fullscreen instead of MapLibre's own
+    // FullscreenControl — its icon is a baked-in SVG data URI we can only
+    // crudely recolor via CSS filters, not match to the site's palette.
+    // MapLibre doesn't auto-resize for a fullscreen change it didn't
+    // trigger itself, so that's handled here too.
+    function handleFullscreenChange() {
+      setIsFullscreen(document.fullscreenElement === wrapRef.current);
+      map.resize();
+    }
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
 
     // `originalEvent` is only set for user-driven camera changes — our own
     // jumpTo() calls below don't set it — so this only cancels follow on a
@@ -615,6 +636,7 @@ export default function FleetMap() {
       if (pollTimer) clearInterval(pollTimer);
       if (selectionRefreshTimer) clearInterval(selectionRefreshTimer);
       document.removeEventListener('click', handleDocumentClick);
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
       window.removeEventListener('keydown', handleKeyDown);
       cancelAnimationFrame(animationFrame);
       map.remove();
@@ -647,8 +669,7 @@ export default function FleetMap() {
         />
       </div>
 
-      <div className="fleet-map-wrap">
-        <span className="fleet-badge">Live demo</span>
+      <div className="fleet-map-wrap" ref={wrapRef}>
         <div ref={containerRef} className="fleet-map" />
 
         {!ready && (
@@ -658,19 +679,59 @@ export default function FleetMap() {
           </div>
         )}
 
-        <div className="fleet-legend">
-          <span>
-            <i className="fleet-dot fleet-dot-moving" />
-            Moving
-          </span>
-          <span>
-            <i className="fleet-dot fleet-dot-idle" />
-            Idle
-          </span>
-          <span>
-            <i className="fleet-dot fleet-dot-anomaly" />
-            Signal loss
-          </span>
+        {isFullscreen && (
+          <div className="fleet-merge-overlay">
+            <span title="The car reported a real jump to a new location and stayed there — accepted as a genuine move, not a glitch.">
+              <strong>{mergeStats.gaps}</strong> gaps bridged
+            </span>
+            <span title="The car missed a check-in. Instead of guessing, we hold its last known position until it reports again.">
+              <strong>{mergeStats.drops}</strong> drops
+            </span>
+            <span title="One bad reading flickered off-course, then immediately corrected itself — we filter it out instead of trusting it.">
+              <strong>{mergeStats.outliers}</strong> spikes rejected
+            </span>
+          </div>
+        )}
+
+        <div className="fleet-overlay-stack fleet-overlay-stack-top-right">
+          <div className="fleet-legend">
+            <span>
+              <i className="fleet-dot fleet-dot-moving" />
+              Moving
+            </span>
+            <span>
+              <i className="fleet-dot fleet-dot-idle" />
+              Idle
+            </span>
+            <span>
+              <i className="fleet-dot fleet-dot-anomaly" />
+              Signal loss
+            </span>
+          </div>
+
+          <button
+            type="button"
+            className="fleet-fullscreen-toggle"
+            onClick={toggleFullscreen}
+            aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+            title={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+          >
+            {isFullscreen ? (
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="9,3 9,9 3,9" />
+                <polyline points="15,3 15,9 21,9" />
+                <polyline points="3,15 9,15 9,21" />
+                <polyline points="21,15 15,15 15,21" />
+              </svg>
+            ) : (
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="9,3 3,3 3,9" />
+                <polyline points="15,3 21,3 21,9" />
+                <polyline points="3,15 3,21 9,21" />
+                <polyline points="21,15 21,21 15,21" />
+              </svg>
+            )}
+          </button>
         </div>
 
         {selected && (

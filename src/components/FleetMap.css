@@ -47,6 +47,36 @@
   gap: 0.15rem;
 }
 
+/* Six items in an unconstrained flex-wrap row down to nothing — on a
+   phone-width card that wraps raggedly (an odd number per row, uneven
+   heights). A fixed 3-column grid keeps it even, and also groups fleet
+   composition (top row) separately from merge stats (bottom row). */
+@media (max-width: 640px) {
+  .fleet-stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1rem 0.5rem;
+    padding: 0.85rem 1rem;
+  }
+
+  .fleet-stat {
+    min-width: 0;
+  }
+
+  .fleet-stat-value {
+    font-size: 0.95rem;
+  }
+
+  .fleet-stat-label {
+    font-size: 0.65rem;
+    letter-spacing: 0.04em;
+  }
+
+  .fleet-stat-tooltip {
+    max-width: min(13rem, 70vw);
+  }
+}
+
 .fleet-stat-has-hint {
   cursor: help;
   outline: none;
@@ -124,32 +154,39 @@
   overflow: hidden;
 }
 
+/* The fixed 680:420 ratio is right for the card layout, but would
+   letterbox the map in fullscreen instead of filling the screen. */
+.fleet-map-wrap:fullscreen {
+  width: 100%;
+  height: 100%;
+  aspect-ratio: auto;
+}
+
 .fleet-map {
   position: absolute;
   inset: 0;
 }
 
-.fleet-badge {
+/* Groups the legend and (in fullscreen) the merge-stats overlay into one
+   flow-positioned column, right-aligned via align-items instead of each
+   child guessing the other's height with a fixed offset — so they can
+   never overlap no matter how either one wraps or grows. */
+.fleet-overlay-stack {
   position: absolute;
-  top: 0.75rem;
-  left: 0.75rem;
   z-index: 1;
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: var(--accent);
-  background: var(--accent-soft);
-  padding: 0.25rem 0.6rem;
-  border-radius: 999px;
-  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.5rem;
+  max-width: calc(100% - 1.5rem);
+}
+
+.fleet-overlay-stack-top-right {
+  top: 0.75rem;
+  right: 0.75rem;
 }
 
 .fleet-legend {
-  position: absolute;
-  top: 0.75rem;
-  right: 0.75rem;
-  z-index: 1;
   display: flex;
   gap: 0.75rem;
   font-size: 0.7rem;
@@ -190,16 +227,110 @@
     0 0 0 4px rgba(245, 158, 11, 0.15);
 }
 
-/* Styles MapLibre's own attribution control to fit the dark theme. Plain
-   global stylesheet, so no :global() wrapper is needed for its classes. */
-.fleet-map .maplibregl-ctrl-attrib {
-  background: rgba(18, 24, 34, 0.75);
+/* Fullscreen strips everything outside .fleet-map-wrap, including the
+   .fleet-stats bar these numbers normally live in — this mirrors them as
+   an overlay (like .fleet-legend). Sits alone in the top-left corner
+   the fullscreen toggle vacated, so it never has to share space. */
+.fleet-merge-overlay {
+  position: absolute;
+  top: 0.75rem;
+  left: 0.75rem;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.9rem;
+  max-width: calc(100% - 1.5rem);
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.45rem 0.75rem;
+}
+
+.fleet-merge-overlay strong {
+  color: var(--text);
+  font-family: var(--font-mono);
+  margin-right: 0.25rem;
+}
+
+/* Styles MapLibre's own attribution control to match the site's other
+   map-overlay chips (legend, fullscreen toggle) instead of the library's
+   default opaque-white box. Plain global stylesheet, so no :global()
+   wrapper is needed for its classes. Targets `.maplibregl-compact`
+   specifically (not just `.maplibregl-ctrl-attrib` alone) since the
+   library's own compact rule sets that background at the same
+   specificity — this needs the extra class to reliably win rather than
+   depending on stylesheet load order. */
+.fleet-map .maplibregl-ctrl-attrib.maplibregl-compact {
+  background-color: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 999px;
   color: var(--text-muted);
   font-size: 0.65rem;
 }
 
 .fleet-map .maplibregl-ctrl-attrib a {
   color: var(--text-muted);
+}
+
+/* The collapsed "i" button is its own semi-white circle with a baked-in
+   black icon (a background-image data URI, not recolorable directly) —
+   inverting it turns that into a semi-dark circle with a white icon,
+   which happens to land right in this theme without hand-tuning colors. */
+.fleet-map .maplibregl-ctrl-attrib-button {
+  filter: invert(1);
+}
+
+/* MapLibre's "compact" attribution actually starts OPEN — it adds
+   `maplibregl-compact-show` on init and only collapses once the map is
+   dragged, not before. These override that show-state class outright
+   (extra `.fleet-map` prefix over the library's own 2-class rules makes
+   them win regardless of stylesheet load order, no !important needed),
+   so it's always closed until actually hovered. */
+.fleet-map .maplibregl-ctrl-attrib.maplibregl-compact-show {
+  padding: 2px 24px 2px 0;
+}
+
+.fleet-map .maplibregl-ctrl-attrib.maplibregl-compact-show .maplibregl-ctrl-attrib-inner {
+  display: none;
+}
+
+.fleet-map .maplibregl-ctrl-attrib.maplibregl-compact:hover {
+  padding: 2px 28px 2px 8px;
+}
+
+.fleet-map .maplibregl-ctrl-attrib.maplibregl-compact:hover .maplibregl-ctrl-attrib-inner {
+  display: block;
+}
+
+.fleet-fullscreen-toggle {
+  /* Flows inside .fleet-overlay-stack-top-right, next to the legend —
+     matching MapLibre's own FullscreenControl default corner. */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.2rem;
+  height: 2.2rem;
+  appearance: none;
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  /* Matches the pill radius used by the legend and attribution chips it
+     now sits stacked next to. */
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.fleet-fullscreen-toggle svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.fleet-fullscreen-toggle:hover,
+.fleet-fullscreen-toggle:focus-visible {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 .fleet-popover {

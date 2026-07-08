@@ -15,21 +15,25 @@ const tags = ['MapLibre', 'deck.gl', 'React'];
         <h3>Fleet tracking at scale</h3>
         <p class="writeup">
           A live fleet-tracking map rebuilding the core of a production dispatch system: ~100
-          vehicles moving along San Francisco's real street network — the underlying pipeline and
-          rendering are built for thousands (see challenge 04); it's throttled here so individual
-          GPS quirks stay legible — rendered with MapLibre GL and deck.gl's IconLayer, with vehicle
-          icons drawn as a tiny in-memory canvas atlas rather than loaded image assets.
+          vehicles moving along San Francisco's real streets, rendered with MapLibre GL and
+          deck.gl's IconLayer. The pipeline scales to thousands (challenge 04) — throttled here so
+          individual GPS quirks stay legible.
         </p>
 
         <div class="feature-block">
           <span class="challenge-index">01</span>
           <strong>Stitching a noisy tracking feed</strong>
           <p>
-            Real position feeds aren't clean: polls come back empty, re-send an already-seen tail,
-            or — near tall buildings or in a tunnel — drift or drop out entirely. The merge step
-            dedupes re-sent points, holds through empty polls, rejects lone bad pings, and accepts
-            sustained relocations as real jumps:
+            Real position feeds aren't clean: polls arrive empty, resend an already-seen tail, or
+            drift and drop out near tall buildings or in a tunnel. The merge step dedupes, holds
+            through gaps, rejects bad pings, and accepts real relocations.
           </p>
+
+          <details class="diagram-details" open>
+            <summary class="diagram-toggle">
+              <span class="when-closed">Show how <span class="chevron">&rarr;</span></span>
+              <span class="when-open">Hide diagrams <span class="chevron">&uarr;</span></span>
+            </summary>
 
           <div class="diagram-tiles diagram-tiles-4">
             <figure class="diagram-tile">
@@ -97,15 +101,22 @@ const tags = ['MapLibre', 'deck.gl', 'React'];
           </div>
 
           <p class="feature-note">
-            An accepted jump also triggers a staggered warning pulse on that vehicle until its next
-            report resolves it.
+            An accepted jump also triggers a warning pulse until the vehicle's next report resolves
+            it.
           </p>
+          </details>
         </div>
 
         <div class="feature-block">
           <span class="challenge-index">02</span>
           <strong>Smoothing across update latency</strong>
-          <p>Rendering the latest known position as it arrived caused a freeze-then-snap between updates; fixed with a playback delay so there's always a real buffered window to interpolate through.</p>
+          <p>Rendering positions as they arrived caused a freeze-then-snap between updates; fixed with a playback delay that always keeps a real window to interpolate through.</p>
+
+          <details class="diagram-details">
+            <summary class="diagram-toggle">
+              <span class="when-closed">Show how <span class="chevron">&rarr;</span></span>
+              <span class="when-open">Hide diagrams <span class="chevron">&uarr;</span></span>
+            </summary>
 
           <div class="diagram-tiles diagram-tiles-2">
             <figure class="diagram-tile">
@@ -138,12 +149,19 @@ const tags = ['MapLibre', 'deck.gl', 'React'];
               <figcaption><strong>Delayed playback</strong>Always a real buffered window to interpolate through.</figcaption>
             </figure>
           </div>
+          </details>
         </div>
 
         <div class="feature-block">
           <span class="challenge-index">03</span>
           <strong>Keeping the UI responsive at startup</strong>
-          <p>Parsing the initial fleet dataset and building vehicle records — up to 5,000 in the full system, 100 here — is heavy synchronous work that would otherwise hang the page while it loads; moved off the main thread into a Web Worker.</p>
+          <p>Parsing the fleet dataset and building vehicle records (5,000 at full scale, 100 here) is heavy synchronous work that would hang the page on load; moved off the main thread into a Web Worker.</p>
+
+          <details class="diagram-details">
+            <summary class="diagram-toggle">
+              <span class="when-closed">Show how <span class="chevron">&rarr;</span></span>
+              <span class="when-open">Hide diagrams <span class="chevron">&uarr;</span></span>
+            </summary>
 
           <div class="diagram-tiles diagram-tiles-2">
             <figure class="diagram-tile">
@@ -164,12 +182,13 @@ const tags = ['MapLibre', 'deck.gl', 'React'];
               <figcaption><strong>Off-thread</strong>A brief handoff, then parsing moves off the main thread.</figcaption>
             </figure>
           </div>
+          </details>
         </div>
 
         <div class="feature-block">
           <span class="challenge-index">04</span>
           <strong>Rendering at scale</strong>
-          <p>DOM-based markers (one element per vehicle, repositioned every frame) stop scaling past a few hundred vehicles; moved to GPU-based instanced rendering (deck.gl's IconLayer) to handle thousands without stalling the browser. Tested up to 5,000 (this demo's previous fleet size) — likely scales further, just not verified past that. Runs 100 here so individual behavior stays visible.</p>
+          <p>DOM-based markers (one element per vehicle, repositioned every frame) stop scaling past a few hundred vehicles; moved to GPU-based instanced rendering — deck.gl's IconLayer, with vehicle icons drawn as a self-hosted canvas atlas instead of loaded images. Tested up to 5,000 vehicles (not verified beyond that); runs 100 here so individual behavior stays visible.</p>
         </div>
 
         <div class="card-footer">
@@ -229,20 +248,25 @@ const tags = ['MapLibre', 'deck.gl', 'React'];
     display: block;
     font-family: var(--font-mono);
     font-size: 0.75rem;
+    font-weight: 600;
     color: var(--accent);
     margin-bottom: 0.5rem;
   }
 
+  /* Sized well above the body paragraph (not just a shade darker) so a
+     skim reads the four headers as the "stop here" layer, with the
+     paragraph underneath easy to skip past rather than skim by accident. */
   .feature-block strong {
     display: block;
     color: var(--text);
-    font-size: 0.95rem;
+    font-size: 1.1rem;
+    letter-spacing: -0.01em;
     margin-bottom: 0.4rem;
   }
 
   .feature-block p {
     color: var(--text-muted);
-    font-size: 0.85rem;
+    font-size: 0.82rem;
     line-height: 1.5;
     max-width: 68ch;
     margin: 0;
@@ -252,10 +276,58 @@ const tags = ['MapLibre', 'deck.gl', 'React'];
     margin: 0 0 1.25rem;
   }
 
-  .feature-block > p.feature-note {
-    margin: 0.85rem 0 0;
+  .feature-block p.feature-note {
+    margin: 0.9rem 0 0;
     font-size: 0.78rem;
     opacity: 0.75;
+  }
+
+  .diagram-details {
+    margin-top: 0.9rem;
+  }
+
+  .diagram-details[open] {
+    margin-top: 1rem;
+  }
+
+  .diagram-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--accent);
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+  }
+
+  .diagram-toggle::-webkit-details-marker {
+    display: none;
+  }
+
+  .diagram-toggle:hover {
+    text-decoration: underline;
+  }
+
+  .diagram-toggle .when-open {
+    display: none;
+  }
+
+  .diagram-details[open] .diagram-toggle .when-open {
+    display: inline;
+  }
+
+  .diagram-details[open] .diagram-toggle .when-closed {
+    display: none;
+  }
+
+  .diagram-toggle .chevron {
+    display: inline-block;
+  }
+
+  .diagram-details .diagram-tiles {
+    margin-top: 0.9rem;
   }
 
   .diagram-tiles {
