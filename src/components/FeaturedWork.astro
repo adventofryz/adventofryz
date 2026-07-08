@@ -16,7 +16,7 @@ const tags = ['MapLibre', 'deck.gl', 'React'];
         <p class="writeup">
           A live fleet-tracking map rebuilding the core of a production dispatch system: ~100
           vehicles moving along San Francisco's real streets, rendered with MapLibre GL and
-          deck.gl's IconLayer. The pipeline scales to thousands (challenge 04) — throttled here so
+          deck.gl's IconLayer. The pipeline scales to thousands (challenge 05) — throttled here so
           individual GPS quirks stay legible.
         </p>
 
@@ -187,6 +187,38 @@ const tags = ['MapLibre', 'deck.gl', 'React'];
 
         <div class="feature-block">
           <span class="challenge-index">04</span>
+          <strong>Picking vehicles at scale</strong>
+          <p>deck.gl's GPU picking needs a synchronous framebuffer readback per click, which got noticeably slower as the fleet grew. Replaced with manual hit-testing: map.project() projects each vehicle to screen space and picks the closest one within a small pixel radius, entirely on the CPU.</p>
+
+          <details class="diagram-details">
+            <summary class="diagram-toggle">
+              <span class="when-closed">Show how <span class="chevron">&rarr;</span></span>
+              <span class="when-open">Hide diagrams <span class="chevron">&uarr;</span></span>
+            </summary>
+
+          <div class="diagram-tiles diagram-tiles-2">
+            <figure class="diagram-tile">
+              <svg class="diagram-svg" viewBox="0 0 400 100" role="img" aria-label="Diagram: GPU picking blocks on a synchronous framebuffer readback before the click resolves">
+                <circle cx="30" cy="60" r="4" class="dot" />
+                <rect x="60" y="52" width="310" height="16" rx="3" class="busy" />
+              </svg>
+              <figcaption><strong>GPU picking</strong>Click stalls on a synchronous readback before selection resolves.</figcaption>
+            </figure>
+
+            <figure class="diagram-tile">
+              <svg class="diagram-svg" viewBox="0 0 400 100" role="img" aria-label="Diagram: manual CPU hit-testing resolves the click immediately with a brief screen-space sweep">
+                <circle cx="30" cy="60" r="4" class="dot" />
+                <rect x="60" y="55" width="30" height="10" rx="2" class="worker" />
+                <line x1="90" y1="60" x2="370" y2="60" class="idle" />
+              </svg>
+              <figcaption><strong>CPU hit-test</strong>A quick screen-space sweep resolves the click immediately.</figcaption>
+            </figure>
+          </div>
+          </details>
+        </div>
+
+        <div class="feature-block">
+          <span class="challenge-index">05</span>
           <strong>Rendering at scale</strong>
           <p>DOM-based markers (one element per vehicle, repositioned every frame) stop scaling past a few hundred vehicles; moved to GPU-based instanced rendering — deck.gl's IconLayer, with vehicle icons drawn as a self-hosted canvas atlas instead of loaded images. Tested up to 5,000 vehicles (not verified beyond that); runs 100 here so individual behavior stays visible.</p>
         </div>

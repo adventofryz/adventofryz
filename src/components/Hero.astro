@@ -4,7 +4,10 @@
 <section id="hero">
   <div class="grid-bg"></div>
   <div class="container">
-    <h1>Frontend engineer specializing in geospatial interfaces.</h1>
+    <h1>
+      <span class="eyebrow">Software Engineer</span>
+      I build systems that make complex data simple.
+    </h1>
   </div>
 </section>
 
@@ -30,12 +33,22 @@
 
   h1 {
     position: relative;
-    max-width: 18ch;
+    max-width: 30ch;
     font-size: clamp(2.25rem, 5vw, 4rem);
     line-height: 1.15;
     font-weight: 600;
     letter-spacing: -0.02em;
     margin: 0;
+  }
+
+  .eyebrow {
+    display: block;
+    font-size: 0.4em;
+    font-weight: 500;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 0.5rem;
   }
 
   @keyframes fade-rise {
