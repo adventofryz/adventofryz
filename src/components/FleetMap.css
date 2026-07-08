@@ -171,9 +171,15 @@
   aspect-ratio: auto;
 }
 
+/* Establishes its own stacking context (z-index, not just position) so
+   deck.gl's overlay canvas — a separate DOM element in non-interleaved
+   mode, with its own internal z-index to sit above the base map canvas —
+   stays contained here instead of competing directly with sibling
+   overlays (sidebar, legend, popover) that live outside this div. */
 .fleet-map {
   position: absolute;
   inset: 0;
+  z-index: 0;
 }
 
 /* Groups the legend and (in fullscreen) the merge-stats overlay into one

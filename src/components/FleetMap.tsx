@@ -109,9 +109,8 @@ export default function FleetMap() {
   // Set inside setup(); lets the sidebar call selectVehicle without a
   // second copy of its logic.
   const selectVehicleRef = useRef<(id: string) => void>(() => {});
-  // Read by statusRefreshTimer below — recomputing status for ~100
-  // vehicles every second is wasted work while the roster is closed and
-  // invisible, and was competing with click handling on the main thread.
+  // Read by poll() below — recomputing status for every vehicle is
+  // wasted work while the roster is closed and invisible.
   const sidebarOpenRef = useRef(false);
   const refreshVehicleStatusRef = useRef<() => void>(() => {});
 
@@ -144,7 +143,6 @@ export default function FleetMap() {
     let animationFrame = 0;
     let pollTimer: ReturnType<typeof setInterval> | undefined;
     let selectionRefreshTimer: ReturnType<typeof setInterval> | undefined;
-    let statusRefreshTimer: ReturnType<typeof setInterval> | undefined;
     let worker: Worker | undefined;
 
     const map = new maplibregl.Map({
@@ -176,8 +174,16 @@ export default function FleetMap() {
     });
 
     // Closes on Escape or a click outside the popover/map; a click on the
-    // map itself is handled by the deck.gl overlay's onClick below, which
+    // map itself is handled by the manual hit-test in setup() below, which
     // knows whether it actually hit a vehicle.
+    //
+    // Registered on the capture phase, not bubble: selecting a vehicle from
+    // the sidebar synchronously closes the sidebar, which unmounts the
+    // clicked row before the event reaches `document` in the bubble phase.
+    // That left `target` detached from the DOM, so `sidebarRootRef.current
+    // .contains(target)` came back false and this cleared the selection
+    // that had just been set. Capture runs before React's onClick handles
+    // the click at all, while the row is still attached.
     function handleDocumentClick(e: MouseEvent) {
       if (!selectedIdRef.current) return;
       const target = e.target as Node;
@@ -189,7 +195,7 @@ export default function FleetMap() {
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key === 'Escape') clearSelection();
     }
-    document.addEventListener('click', handleDocumentClick);
+    document.addEventListener('click', handleDocumentClick, true);
     window.addEventListener('keydown', handleKeyDown);
 
     map.on('load', () => {
@@ -260,20 +266,15 @@ export default function FleetMap() {
 
     // MapboxOverlay targets mapbox-gl's IControl type; MapLibre implements
     // the same interface, so this cast is deck.gl's documented MapLibre usage.
-    const overlay = new MapboxOverlay({
-      interleaved: true,
-      layers: [],
-      getCursor: ({ isDragging, isHovering }) => (isDragging ? 'grabbing' : isHovering ? 'pointer' : 'grab'),
-      // Icons render at 15-20px, too small a target for pixel-exact default
-      // picking — pads the hit-test area by 20px regardless of icon size.
-      pickingRadius: 20,
-      // The IconLayer's own onClick (below) handles picks; this only sees
-      // `picked: false` — the map background, including POI dots since
-      // those aren't a deck.gl layer — and treats that as "dismiss".
-      onClick: (info) => {
-        if (!info.picked) clearSelection();
-      },
-    });
+    // Not interleaved — that mode exists to depth-sort deck.gl layers against
+    // 3D map geometry (extruded buildings, etc.), which this flat 2D Voyager
+    // style has none of. Overlaid is the simpler/cheaper default: deck.gl
+    // draws to its own canvas composited on top, no shared GL context.
+    // No layers here are pickable — vehicle hit-testing is done manually
+    // below (map.project() against renderVehicles) instead of deck.gl's own
+    // GPU-picking, which requires a synchronous readback and made click
+    // response noticeably slower than a plain DOM event.
+    const overlay = new MapboxOverlay({ layers: [] });
     map.addControl(overlay as unknown as maplibregl.IControl);
 
     async function setup() {
@@ -351,6 +352,43 @@ export default function FleetMap() {
         const rv = renderVehicleById.get(id);
         if (rv) map.easeTo({ center: [rv.lng, rv.lat], duration: 600 });
       };
+
+      // Manual hit-testing instead of deck.gl's GPU picking — map.project()
+      // is a cheap synchronous CPU transform, so this stays fast at fleet
+      // sizes deck.gl's readback-per-click cost wouldn't.
+      const HIT_RADIUS_PX = 20;
+
+      function closestVehicleTo(point: { x: number; y: number }): RenderVehicle | null {
+        let closest: RenderVehicle | null = null;
+        let closestDistSq = HIT_RADIUS_PX * HIT_RADIUS_PX;
+        for (const rv of renderVehicles) {
+          const p = map.project([rv.lng, rv.lat]);
+          const distSq = (p.x - point.x) ** 2 + (p.y - point.y) ** 2;
+          if (distSq <= closestDistSq) {
+            closest = rv;
+            closestDistSq = distSq;
+          }
+        }
+        return closest;
+      }
+
+      map.on('click', (e) => {
+        const hit = closestVehicleTo(e.point);
+        if (hit) selectVehicle(hit.id);
+        else clearSelection();
+      });
+
+      // Throttled — run on every mousemove, this is thousands of
+      // map.project() calls a second during fast mouse movement at large
+      // fleet sizes, for a cursor hint that doesn't need that precision.
+      const canvasContainer = map.getCanvasContainer();
+      let lastHoverCheck = 0;
+      map.on('mousemove', (e) => {
+        const now = performance.now();
+        if (now - lastHoverCheck < 50) return;
+        lastHoverCheck = now;
+        canvasContainer.style.cursor = closestVehicleTo(e.point) ? 'pointer' : '';
+      });
 
       const movingCount = fleet.filter((v) => !v.idle).length;
       setStats({ total: fleet.length, moving: movingCount, idle: fleet.length - movingCount });
@@ -533,11 +571,6 @@ export default function FleetMap() {
           sizeUnits: 'pixels',
           sizeMinPixels: 5,
           sizeMaxPixels: 20,
-          pickable: true,
-          onClick: (info) => {
-            if (!info.object) return;
-            selectVehicle(info.object.id);
-          },
           updateTriggers: {
             getPosition: frameTick,
             getAngle: frameTick,
@@ -605,23 +638,10 @@ export default function FleetMap() {
       const startTime = performance.now();
       let lastPollT = 0;
 
-      function poll() {
-        const nowT = performance.now() - startTime;
-        applyBatch(pollFleet(fleet, lastPollT, nowT), nowT, true);
-        lastPollT = nowT;
-      }
-
-      pollTimer = setInterval(poll, POLL_INTERVAL_MS);
-
-      // Keeps the popover's heading/status fields live while the vehicle
-      // moves, without re-rendering React on every animation frame.
-      selectionRefreshTimer = setInterval(() => {
-        const id = selectedIdRef.current;
-        if (id) setSelected(computeSelected(id));
-      }, 300);
-
-      // Drives the sidebar's status dots — coarser than the selection
-      // refresh above since the roster doesn't need render-loop precision.
+      // Drives the sidebar's status dots. `idle`/`moving` never changes at
+      // runtime and `anomalies` only changes inside applyBatch (i.e. on a
+      // poll) — there's no independent clock this needs to run on, so poll()
+      // below is the only place it's called, gated on the sidebar being open.
       function refreshVehicleStatus() {
         const next: Record<string, VehicleStatus> = {};
         for (const rv of renderVehicles) {
@@ -632,9 +652,22 @@ export default function FleetMap() {
         setVehicleStatus(next);
       }
       refreshVehicleStatusRef.current = refreshVehicleStatus;
-      statusRefreshTimer = setInterval(() => {
+
+      function poll() {
+        const nowT = performance.now() - startTime;
+        applyBatch(pollFleet(fleet, lastPollT, nowT), nowT, true);
+        lastPollT = nowT;
         if (sidebarOpenRef.current) refreshVehicleStatus();
-      }, 1000);
+      }
+
+      pollTimer = setInterval(poll, POLL_INTERVAL_MS);
+
+      // Keeps the popover's heading/status fields live while the vehicle
+      // moves, without re-rendering React on every animation frame.
+      selectionRefreshTimer = setInterval(() => {
+        const id = selectedIdRef.current;
+        if (id) setSelected(computeSelected(id));
+      }, 300);
 
       function frame() {
         const realNowT = performance.now() - startTime;
@@ -681,8 +714,7 @@ export default function FleetMap() {
       worker?.terminate();
       if (pollTimer) clearInterval(pollTimer);
       if (selectionRefreshTimer) clearInterval(selectionRefreshTimer);
-      if (statusRefreshTimer) clearInterval(statusRefreshTimer);
-      document.removeEventListener('click', handleDocumentClick);
+      document.removeEventListener('click', handleDocumentClick, true);
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
       window.removeEventListener('keydown', handleKeyDown);
       cancelAnimationFrame(animationFrame);
@@ -731,8 +763,13 @@ export default function FleetMap() {
               const next = !sidebarOpen;
               sidebarOpenRef.current = next;
               setSidebarOpen(next);
-              // Otherwise the dots would show up to a second-old data on open.
-              if (next) refreshVehicleStatusRef.current();
+              if (next) {
+                // Otherwise the dots would show up to a second-old data on open.
+                refreshVehicleStatusRef.current();
+                // Mirrors selectVehicle closing the sidebar — keeps the two
+                // from ever being open at the same time in either direction.
+                clearSelection();
+              }
             }}
             onSelectVehicle={(id) => selectVehicleRef.current(id)}
           />
