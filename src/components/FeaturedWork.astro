@@ -514,4 +514,18 @@ const tags = ['MapLibre', 'deck.gl', 'React'];
     border-radius: 999px;
     padding: 0.25rem 0.75rem;
   }
+
+  /* Cancels .container's 1.5rem side padding for just the card, so the
+     map inside reaches the screen edges instead of losing ~13% of a
+     phone's width to the page gutter. card-body keeps its own padding,
+     so the write-up text underneath stays readable either way. */
+  @media (max-width: 640px) {
+    .card {
+      margin-left: -1.5rem;
+      margin-right: -1.5rem;
+      border-left: none;
+      border-right: none;
+      border-radius: 0;
+    }
+  }
 </style>

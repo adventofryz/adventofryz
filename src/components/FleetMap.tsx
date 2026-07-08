@@ -881,11 +881,20 @@ export default function FleetMap() {
 function Stat({ label, value, tone, hint }: { label: string; value: number; tone?: 'moving' | 'idle'; hint?: string }) {
   return (
     <div className={`fleet-stat${hint ? ' fleet-stat-has-hint' : ''}`} tabIndex={hint ? 0 : undefined}>
-      <span className={`fleet-stat-value${tone ? ` fleet-stat-${tone}` : ''}`}>{value.toLocaleString()}</span>
+      <span className="fleet-stat-value-row">
+        {hint && (
+          <svg className="fleet-stat-hint-icon fleet-stat-hint-icon-mobile" viewBox="0 0 16 16" aria-hidden="true">
+            <circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" strokeWidth="1.4" />
+            <circle cx="8" cy="4.6" r="1" fill="currentColor" />
+            <line x1="8" y1="7.2" x2="8" y2="11.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+          </svg>
+        )}
+        <span className={`fleet-stat-value${tone ? ` fleet-stat-${tone}` : ''}`}>{value.toLocaleString()}</span>
+      </span>
       <span className="fleet-stat-label">
         {label}
         {hint && (
-          <svg className="fleet-stat-hint-icon" viewBox="0 0 16 16" aria-hidden="true">
+          <svg className="fleet-stat-hint-icon fleet-stat-hint-icon-desktop" viewBox="0 0 16 16" aria-hidden="true">
             <circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" strokeWidth="1.4" />
             <circle cx="8" cy="4.6" r="1" fill="currentColor" />
             <line x1="8" y1="7.2" x2="8" y2="11.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
